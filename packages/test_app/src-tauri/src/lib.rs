@@ -1,4 +1,4 @@
-use iced::widget::{button, column, text};
+use iced::widget::{button, column, text, text_input};
 use iced::Theme;
 use iced_wgpu::Renderer;
 use tauri_plugin_iced::AppHandleExt;
@@ -7,12 +7,14 @@ use tauri_plugin_iced::IcedControls;
 #[derive(Default)]
 struct Counter {
     value: i32,
+    text_input: String,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum CounterMessage {
     Increment,
     Decrement,
+    TextInputChanged(String),
 }
 
 impl IcedControls for Counter {
@@ -24,6 +26,10 @@ impl IcedControls for Counter {
             text(self.value).size(30),
             button("+").on_press(CounterMessage::Increment),
             button("-").on_press(CounterMessage::Decrement),
+            text("Text Input Demo:").size(20),
+            text_input("Type here...", &self.text_input)
+                .on_input(|s| CounterMessage::TextInputChanged(s))
+                .padding(10),
         ]
         .spacing(20)
         .padding(20)
@@ -34,6 +40,10 @@ impl IcedControls for Counter {
         match message {
             CounterMessage::Increment => self.value += 1,
             CounterMessage::Decrement => self.value -= 1,
+            CounterMessage::TextInputChanged(text) => {
+                self.text_input = text;
+                log::info!("Text input changed: {}", self.text_input);
+            }
         }
     }
 }

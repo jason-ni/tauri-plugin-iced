@@ -5313,6 +5313,7 @@ dependencies = [
  "iced_wgpu",
  "iced_widget",
  "iced_winit",
+ "log",
  "serde",
  "tauri",
  "tauri-plugin",

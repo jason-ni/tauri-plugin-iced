@@ -15,15 +15,14 @@ pub trait IcedControls: Send + Sync {
 
     fn update(&mut self, message: Self::Message);
 
-    fn handle_event(&mut self, _event: &iced_winit::core::Event) {}
-
     fn background_color(&self) -> Color {
         Color::BLACK
     }
 }
 
 pub use event_conversion::{
-    convert_modifiers, convert_mouse_button, convert_mouse_position, create_viewport,
+    convert_location, convert_modifiers, convert_mouse_button, convert_mouse_position,
+    create_viewport, convert_window_event,
 };
 pub use plugin::{AppHandleExt, Builder};
 pub use scene::Scene;

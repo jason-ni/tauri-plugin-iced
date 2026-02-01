@@ -5,6 +5,7 @@ use crate::renderer::Renderer;
 use crate::utils::IcedWindow;
 use crate::IcedControls;
 use anyhow::Error;
+use iced_core::keyboard;
 use iced_wgpu::graphics::Viewport;
 use iced_winit::runtime::user_interface::Cache;
 use iced_winit::Clipboard;
@@ -216,6 +217,7 @@ impl AppHandleExt for AppHandle {
             size: PhysicalSize { width, height },
             scene: None,
             resized: false,
+            modifiers: keyboard::Modifiers::empty(),
         };
 
         let staging_window = self

@@ -9,6 +9,8 @@ rust-version = "1.77.2"
 links = "tauri-plugin-iced"
 
 [dependencies]
+log = "0.4"
+
 tauri = { workspace = true }
 tauri-runtime = { workspace = true }
 tauri-runtime-wry = { workspace = true }

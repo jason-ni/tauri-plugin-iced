@@ -1,8 +1,9 @@
-use crate::event_conversion::{convert_mouse_button, convert_mouse_position, create_viewport};
+use crate::event_conversion::{convert_modifiers, convert_window_event, create_viewport};
 use crate::renderer::Renderer;
 use crate::scene::{clear, Scene};
 use crate::IcedControls;
 use anyhow::Error;
+use iced_core::keyboard;
 use iced_core::mouse;
 use iced_wgpu::graphics::Viewport;
 use iced_winit::core::Event;
@@ -28,20 +29,24 @@ pub struct IcedWindow<M> {
     pub size: PhysicalSize<u32>,
     pub scene: Option<Box<dyn Scene>>,
     pub resized: bool,
+    pub modifiers: keyboard::Modifiers,
 }
 
 unsafe impl<M> Send for IcedWindow<M> {}
 unsafe impl<M> Sync for IcedWindow<M> {}
 
 fn is_relevant_event(event: &WindowEvent) -> bool {
-    matches!(
-        event,
+    match event {
         WindowEvent::CursorMoved { .. }
-            | WindowEvent::MouseInput { .. }
-            | WindowEvent::ModifiersChanged(_)
-            | WindowEvent::Resized(_)
-            | WindowEvent::ScaleFactorChanged { .. }
-    )
+        | WindowEvent::MouseInput { .. }
+        | WindowEvent::MouseWheel { .. }
+        | WindowEvent::ModifiersChanged(_)
+        | WindowEvent::Resized(_)
+        | WindowEvent::ScaleFactorChanged { .. }
+        | WindowEvent::KeyboardInput { .. }
+        | WindowEvent::Focused(_) => true,
+        _ => false,
+    }
 }
 
 impl<M> IcedWindow<M> {
@@ -51,52 +56,27 @@ impl<M> IcedWindow<M> {
         }
 
         match event {
-            WindowEvent::CursorMoved { position, .. } => {
-                if let Some(cursor_pos) =
-                    convert_mouse_position(position.x, position.y, self.scale_factor)
-                {
-                    self.cursor = mouse::Cursor::Available(cursor_pos);
-                    self.events.push(Event::Mouse(mouse::Event::CursorMoved {
-                        position: cursor_pos,
-                    }));
-                    true
-                } else {
-                    false
-                }
-            }
-            WindowEvent::MouseInput { state, button, .. } => {
-                if let Some(mouse_button) = convert_mouse_button(button) {
-                    let mouse_event =
-                        if *state == tauri_runtime_wry::tao::event::ElementState::Pressed {
-                            mouse::Event::ButtonPressed(mouse_button)
-                        } else {
-                            mouse::Event::ButtonReleased(mouse_button)
-                        };
-                    self.events.push(Event::Mouse(mouse_event));
-                    true
-                } else {
-                    false
-                }
-            }
             WindowEvent::ModifiersChanged(new_modifiers) => {
-                let state = new_modifiers.bits();
-                let modifiers = iced_core::keyboard::Modifiers::from_bits_retain(state);
-                self.events.push(Event::Keyboard(
-                    iced_core::keyboard::Event::ModifiersChanged(modifiers),
-                ));
-                true
-            }
-            WindowEvent::Resized(new_size) => {
-                self.size = PhysicalSize::new(new_size.width, new_size.height);
-                self.resized = true;
-                true
+                self.modifiers = convert_modifiers(&new_modifiers);
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 self.scale_factor = *scale_factor as f32;
                 self.resized = true;
-                true
             }
-            _ => false,
+            WindowEvent::Resized(new_size) => {
+                self.size = PhysicalSize::new(new_size.width, new_size.height);
+                self.resized = true;
+            }
+            _ => {}
+        }
+
+        log::info!("== converting event to iced event: {:?}", event);
+        if let Some(iced_event) = convert_window_event(event, self.scale_factor, self.modifiers) {
+            log::info!("== iced event: {:?}", iced_event);
+            self.events.push(iced_event);
+            true
+        } else {
+            false
         }
     }
 
@@ -107,9 +87,7 @@ impl<M> IcedWindow<M> {
 
         let messages = std::mem::take(&mut self.events);
 
-        for event in &messages {
-            self.controls.handle_event(event);
-        }
+        log::info!("== processing events: {:?}", messages);
 
         let mut interface = UserInterface::build(
             self.controls.view(),
