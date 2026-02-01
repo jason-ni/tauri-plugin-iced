@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["packages/*"]
+members = ["packages/tauri-pluginiced"]
+exclude = ["packages/test_app"]
 
 [workspace.package]
 version = "0.1.0"

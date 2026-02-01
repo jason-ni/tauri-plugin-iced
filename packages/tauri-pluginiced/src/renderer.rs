@@ -1,5 +1,5 @@
 use anyhow::Error;
-use iced_wgpu::{Engine, Renderer as IcedRenderer, wgpu};
+use iced_wgpu::{wgpu, Engine, Renderer as IcedRenderer};
 use iced_winit::core::{Font, Pixels};
 
 pub struct Renderer {
@@ -7,8 +7,13 @@ pub struct Renderer {
     pub renderer: IcedRenderer,
 }
 
+pub struct FrameAndView {
+    pub surface_texture: wgpu::SurfaceTexture,
+    pub view: wgpu::TextureView,
+}
+
 pub struct Gpu {
-    instance: wgpu::Instance,
+    _instance: wgpu::Instance,
     adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -37,6 +42,14 @@ impl Renderer {
 
         Ok(Self { gpu, renderer })
     }
+
+    pub fn iced_renderer(&mut self) -> &mut IcedRenderer {
+        &mut self.renderer
+    }
+
+    pub fn gpu(&self) -> &Gpu {
+        &self.gpu
+    }
 }
 
 impl Gpu {
@@ -53,8 +66,8 @@ impl Gpu {
         });
         let surface = instance.create_surface(window)?;
 
-        let adapter = wgpu::util::initialize_adapter_from_env_or_default(&instance, Some(&surface))
-            .await?;
+        let adapter =
+            wgpu::util::initialize_adapter_from_env_or_default(&instance, Some(&surface)).await?;
 
         let adapter_features = adapter.features();
 
@@ -101,7 +114,7 @@ impl Gpu {
         );
 
         Ok(Self {
-            instance,
+            _instance: instance,
             adapter,
             device,
             queue,
@@ -134,5 +147,30 @@ impl Gpu {
                 desired_maximum_frame_latency: 2,
             },
         );
+    }
+
+    pub fn get_frame(&self) -> Result<FrameAndView, wgpu::SurfaceError> {
+        let surface_texture = self.surface.get_current_texture()?;
+
+        let view = surface_texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        Ok(FrameAndView {
+            surface_texture,
+            view,
+        })
+    }
+
+    pub fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
+
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.surface_format
     }
 }

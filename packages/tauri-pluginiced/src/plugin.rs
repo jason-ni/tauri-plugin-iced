@@ -1,25 +1,25 @@
 // Plugin implementation module
 
-use anyhow::Error;
-use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
-use std::marker::PhantomData;
-use tauri::{AppHandle, Manager};
-use tauri_runtime::window::CursorIcon;
-use tauri_runtime::dpi::PhysicalSize;
-use tauri_runtime::UserEvent;
-use tauri_runtime_wry::{Context, PluginBuilder, WindowMessage, Message, Plugin};
-use tauri_runtime_wry::tao::event::{Event, WindowEvent as TaoWindowEvent};
-use tauri_runtime_wry::tao::event_loop::{ControlFlow, EventLoopProxy, EventLoopWindowTarget};
-use tauri_runtime_wry::tao::window::WindowId;
-use tauri_runtime_wry::{EventLoopIterationContext, WebContextStore};
-use crate::IcedControls;
 use crate::event_conversion;
 use crate::renderer::Renderer;
 use crate::utils::IcedWindow;
+use crate::IcedControls;
+use anyhow::Error;
 use iced_wgpu::graphics::Viewport;
-use iced_winit::Clipboard;
 use iced_winit::runtime::user_interface::Cache;
+use iced_winit::Clipboard;
+use std::collections::HashMap;
+use std::marker::PhantomData;
+use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Manager};
+use tauri_runtime::dpi::PhysicalSize;
+use tauri_runtime::window::CursorIcon;
+use tauri_runtime::UserEvent;
+use tauri_runtime_wry::tao::event::{Event, WindowEvent as TaoWindowEvent};
+use tauri_runtime_wry::tao::event_loop::{ControlFlow, EventLoopProxy, EventLoopWindowTarget};
+use tauri_runtime_wry::tao::window::WindowId;
+use tauri_runtime_wry::{Context, Message, Plugin, PluginBuilder, WindowMessage};
+use tauri_runtime_wry::{EventLoopIterationContext, WebContextStore};
 
 /// Wrapper for staging IcedWindow to handle race conditions during window creation.
 pub struct StagingWindowWrapper<M, C: IcedControls<Message = M>> {
@@ -36,15 +36,24 @@ pub struct Builder<M, C: IcedControls<Message = M>> {
 
 impl<M, C: IcedControls<Message = M>> Builder<M, C> {
     pub fn new(app: AppHandle) -> Self {
-        Self { app, phantom: PhantomData }
+        Self {
+            app,
+            phantom: PhantomData,
+        }
     }
 }
 
-impl<T: 'static + UserEvent + std::fmt::Debug, M: 'static, C: IcedControls<Message = M> + 'static> PluginBuilder<T> for Builder<M, C> {    
+impl<
+        T: 'static + UserEvent + std::fmt::Debug,
+        M: 'static,
+        C: IcedControls<Message = M> + 'static,
+    > PluginBuilder<T> for Builder<M, C>
+{
     type Plugin = IcedPlugin<T, M, C>;
 
     fn build(self, _: Context<T>) -> Self::Plugin {
-        let iced_window_map: Arc<Mutex<HashMap<String, IcedWindow<M, C>>>> = Arc::new(Mutex::new(HashMap::new()));
+        let iced_window_map: Arc<Mutex<HashMap<String, IcedWindow<M, C>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
         let staging_window = Arc::new(Mutex::new(StagingWindowWrapper { window: None }));
         self.app.manage(iced_window_map.clone());
         self.app.manage(staging_window.clone());
@@ -128,7 +137,6 @@ impl<T: UserEvent + std::fmt::Debug, M, C: IcedControls<Message = M>> IcedPlugin
             iced_core::mouse::Interaction::AllScroll => CursorIcon::AllScroll,
             iced_core::mouse::Interaction::ZoomIn => CursorIcon::ZoomIn,
             iced_core::mouse::Interaction::ZoomOut => CursorIcon::ZoomOut,
-            _ => CursorIcon::Default,
         }
     }
 
@@ -138,13 +146,10 @@ impl<T: UserEvent + std::fmt::Debug, M, C: IcedControls<Message = M>> IcedPlugin
         let mut staging_window = self.staging_window.lock().unwrap();
 
         if !windows.contains_key(label) {
-            if let Some(staging_label_opt) =
-                staging_window.window.as_ref().map(|(l, _)| l.clone())
+            if let Some(staging_label_opt) = staging_window.window.as_ref().map(|(l, _)| l.clone())
             {
                 if label == staging_label_opt {
-                    if let Some((staging_label, staging_win)) =
-                        staging_window.window.take()
-                    {
+                    if let Some((staging_label, staging_win)) = staging_window.window.take() {
                         windows.insert(staging_label, staging_win);
                     }
                 }
@@ -154,10 +159,9 @@ impl<T: UserEvent + std::fmt::Debug, M, C: IcedControls<Message = M>> IcedPlugin
 }
 
 /// Extension trait for AppHandle to add Iced window support.  ///
-/// 
+///
 /// This trait adds the `create_iced_window` method to Tauri's AppHandle.
 pub trait AppHandleExt {
-
     /// Create an Iced-rendered window with the given controls.
     ///
     /// # Arguments
@@ -178,17 +182,14 @@ pub trait AppHandleExt {
         label: &str,
         controls: C,
     ) -> Result<(), Error>;
-
 }
 
 impl AppHandleExt for AppHandle {
-
     fn create_iced_window<M: 'static, C: IcedControls<Message = M> + 'static>(
         &self,
         label: &str,
         controls: C,
-    ) -> Result<(), Error>
-    {
+    ) -> Result<(), Error> {
         let window = self
             .get_window(label)
             .ok_or_else(|| anyhow::anyhow!("No window found with label: {}", label))?;
@@ -198,13 +199,14 @@ impl AppHandleExt for AppHandle {
 
         let viewport: Viewport = event_conversion::create_viewport(width, height, scale_factor);
 
-        // TODO: Task 8.6 - Create Iced Clipboard instance
-        // For now, use a dummy clipboard (task 10.4 - headless clipboard fallback)
+        // Using headless clipboard fallback (task 10.4)
+        // Full clipboard integration requires winit window access
         let clipboard: Clipboard = Clipboard::unconnected();
 
-        let renderer: Renderer = tauri::async_runtime::block_on(async move {
-            Renderer::new(window, width, height).await
-        })?;
+        let renderer: Renderer =
+            tauri::async_runtime::block_on(
+                async move { Renderer::new(window, width, height).await },
+            )?;
 
         let iced_window = IcedWindow {
             label: label.to_string(),
@@ -217,6 +219,8 @@ impl AppHandleExt for AppHandle {
             cursor: iced_core::mouse::Cursor::Unavailable,
             scale_factor,
             size: PhysicalSize { width, height },
+            scene: None,
+            resized: false,
         };
 
         let staging_window = self
@@ -228,10 +232,11 @@ impl AppHandleExt for AppHandle {
 
         Ok(())
     }
-    
 }
 
-impl<T: UserEvent + std::fmt::Debug, M, C: IcedControls<Message = M>> Plugin<T> for IcedPlugin<T, M, C> {
+impl<T: UserEvent + std::fmt::Debug, M, C: IcedControls<Message = M>> Plugin<T>
+    for IcedPlugin<T, M, C>
+{
     fn on_event(
         &mut self,
         event: &Event<Message<T>>,
@@ -242,10 +247,7 @@ impl<T: UserEvent + std::fmt::Debug, M, C: IcedControls<Message = M>> Plugin<T> 
         _: &WebContextStore,
     ) -> bool {
         match event {
-            Event::LoopDestroyed => {
-                return false;
-            }
-
+            Event::LoopDestroyed => false,
             Event::WindowEvent {
                 event: TaoWindowEvent::Destroyed { .. },
                 window_id,
@@ -255,25 +257,28 @@ impl<T: UserEvent + std::fmt::Debug, M, C: IcedControls<Message = M>> Plugin<T> 
                     let mut windows = self.windows.lock().unwrap();
                     windows.remove(&label);
                 }
-                return false;
+                false
             }
-
             Event::WindowEvent {
                 event: tao_window_event,
                 window_id,
                 ..
             } => {
+
                 if let Some(label) = Self::get_label_from_tao_id(*window_id, &context) {
                     self.transfer_staging_window(&label);
 
                     if let Some(iced_window) = self.windows.lock().unwrap().get_mut(&label) {
                         match tao_window_event {
                             TaoWindowEvent::Resized(size) => {
-                                iced_window.renderer.gpu.resize(size.width, size.height);
+                                iced_window.size = PhysicalSize::new(size.width, size.height);
+                                iced_window.resized = true;
                             }
                             _ => {
                                 if iced_window.handle_event(tao_window_event) {
-                                    if let Some(win_id) = Self::get_id_from_tao_id(*window_id, &context) {
+                                    if let Some(win_id) =
+                                        Self::get_id_from_tao_id(*window_id, &context)
+                                    {
                                         let _ = proxy.send_event(Message::Window(
                                             win_id,
                                             WindowMessage::RequestRedraw,
@@ -294,7 +299,7 @@ impl<T: UserEvent + std::fmt::Debug, M, C: IcedControls<Message = M>> Plugin<T> 
 
                     if let Some(iced_window) = self.windows.lock().unwrap().get_mut(&label) {
                         iced_window.process_events();
-                        iced_window.render();
+                        iced_window.render_with_retry(&self.app);
                     }
                 }
 

@@ -1,20 +1,17 @@
-// Utility functions module
-// This will contain helper functions
-
 use crate::event_conversion::{convert_mouse_button, convert_mouse_position, create_viewport};
 use crate::renderer::Renderer;
+use crate::scene::{clear, Scene};
 use crate::IcedControls;
+use anyhow::Error;
 use iced_core::mouse;
 use iced_wgpu::graphics::Viewport;
 use iced_winit::core::Event;
 use iced_winit::runtime::user_interface::{Cache, UserInterface};
 use iced_winit::Clipboard;
+use tauri::AppHandle;
 use tauri_runtime::dpi::PhysicalSize;
 use tauri_runtime_wry::tao::event::WindowEvent;
 
-/// A single Iced window with its associated state.
-///
-/// Each window has independent state and rendering resources.
 pub struct IcedWindow<M, C: IcedControls<Message = M>> {
     pub label: String,
     pub controls: C,
@@ -26,26 +23,13 @@ pub struct IcedWindow<M, C: IcedControls<Message = M>> {
     pub cursor: mouse::Cursor,
     pub scale_factor: f32,
     pub size: PhysicalSize<u32>,
+    pub scene: Option<Box<dyn Scene>>,
+    pub resized: bool,
 }
 
 unsafe impl<M, C: IcedControls<Message = M>> Send for IcedWindow<M, C> {}
 unsafe impl<M, C: IcedControls<Message = M>> Sync for IcedWindow<M, C> {}
 
-/// Check if a Tauri window event is relevant for Iced.
-///
-/// Only forward these events to Iced:
-/// - CursorMoved: Mouse position changes
-/// - MouseInput: Button clicks/releases
-/// - ModifiersChanged: Modifier key state
-/// - Resized: Window dimension changes
-/// - ScaleFactorChanged: DPI scale changes
-///
-/// Ignore these events:
-/// - Moved: Window position changes
-/// - Focused: Focus state
-/// - DroppedFile: File drops
-/// - HoveredFile: File hover
-/// - Touch events: Not implemented for desktop
 fn is_relevant_event(event: &WindowEvent) -> bool {
     matches!(
         event,
@@ -58,9 +42,6 @@ fn is_relevant_event(event: &WindowEvent) -> bool {
 }
 
 impl<M, C: IcedControls<Message = M>> IcedWindow<M, C> {
-    /// Process a Tauri window event and convert it to an Iced event if relevant.
-    ///
-    /// Returns true if event was consumed (should not be forwarded).
     pub fn handle_event(&mut self, event: &WindowEvent) -> bool {
         if !is_relevant_event(event) {
             return false;
@@ -104,20 +85,18 @@ impl<M, C: IcedControls<Message = M>> IcedWindow<M, C> {
             }
             WindowEvent::Resized(new_size) => {
                 self.size = PhysicalSize::new(new_size.width, new_size.height);
-                self.viewport = create_viewport(new_size.width, new_size.height, self.scale_factor);
+                self.resized = true;
                 true
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 self.scale_factor = *scale_factor as f32;
-                self.viewport =
-                    create_viewport(self.size.width, self.size.height, self.scale_factor);
+                self.resized = true;
                 true
             }
             _ => false,
         }
     }
 
-    /// Process accumulated Iced events and handle user interactions.
     pub fn process_events(&mut self) {
         if self.events.is_empty() {
             return;
@@ -125,7 +104,6 @@ impl<M, C: IcedControls<Message = M>> IcedWindow<M, C> {
 
         let messages = std::mem::take(&mut self.events);
 
-        // Forward events to controls
         for event in &messages {
             self.controls.handle_event(event);
         }
@@ -134,29 +112,51 @@ impl<M, C: IcedControls<Message = M>> IcedWindow<M, C> {
             self.controls.view(),
             self.viewport.logical_size(),
             std::mem::take(&mut self.cache),
-            &mut self.renderer.renderer,
+            self.renderer.iced_renderer(),
         );
 
         let (_, _control_messages) = interface.update(
             &messages,
             self.cursor,
-            &mut self.renderer.renderer,
+            self.renderer.iced_renderer(),
             &mut self.clipboard,
             &mut std::vec::Vec::new(),
         );
 
         self.cache = interface.into_cache();
-
-        // Note: Message handling would go here if we weren't using Message = ()
     }
 
-    /// Render the UI to the WGPU surface.
-    pub fn render(&mut self) {
+    pub fn render(&mut self, _app_handle: &AppHandle) -> Result<(), Error> {
+        if self.resized {
+            self.renderer.gpu.resize(self.size.width, self.size.height);
+            self.viewport = create_viewport(self.size.width, self.size.height, self.scale_factor);
+            self.resized = false;
+        }
+
+        let frame_and_view = self.renderer.gpu.get_frame()?;
+
+        let mut encoder = self
+            .renderer
+            .gpu
+            .device()
+            .create_command_encoder(&iced_wgpu::wgpu::CommandEncoderDescriptor { label: None });
+
+        if let Some(scene) = &self.scene {
+            let mut render_pass = clear(
+                &frame_and_view.view,
+                &mut encoder,
+                self.controls.background_color(),
+            );
+            scene.draw(&mut render_pass);
+        }
+
+        self.renderer.gpu.queue().submit([encoder.finish()]);
+
         let mut interface = UserInterface::build(
             self.controls.view(),
             self.viewport.logical_size(),
             std::mem::take(&mut self.cache),
-            &mut self.renderer.renderer,
+            self.renderer.iced_renderer(),
         );
 
         let (_, _) = interface.update(
@@ -164,13 +164,13 @@ impl<M, C: IcedControls<Message = M>> IcedWindow<M, C> {
                 iced_core::time::Instant::now(),
             ))],
             self.cursor,
-            &mut self.renderer.renderer,
+            self.renderer.iced_renderer(),
             &mut self.clipboard,
             &mut std::vec::Vec::new(),
         );
 
         interface.draw(
-            &mut self.renderer.renderer,
+            self.renderer.iced_renderer(),
             &iced_winit::core::Theme::Dark,
             &iced_core::renderer::Style::default(),
             self.cursor,
@@ -178,7 +178,31 @@ impl<M, C: IcedControls<Message = M>> IcedWindow<M, C> {
 
         self.cache = interface.into_cache();
 
-        // TODO: Call renderer.present() to render to surface
-        // This requires getting the current texture from the surface
+        self.renderer.iced_renderer().present(
+            None,
+            frame_and_view.surface_texture.texture.format(),
+            &frame_and_view.view,
+            &self.viewport,
+        );
+
+        frame_and_view.surface_texture.present();
+
+        Ok(())
+    }
+
+    pub fn render_with_retry(&mut self, app_handle: &AppHandle) {
+        match self.render(app_handle) {
+            Ok(_) => {}
+            Err(e) => {
+                if let Some(surface_error) = e.downcast_ref::<iced_wgpu::wgpu::SurfaceError>() {
+                    match surface_error {
+                        iced_wgpu::wgpu::SurfaceError::OutOfMemory => {
+                            panic!("Swapchain error: {surface_error}. Rendering cannot continue.")
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
     }
 }
