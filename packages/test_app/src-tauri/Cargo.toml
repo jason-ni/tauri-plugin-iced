@@ -23,6 +23,7 @@ serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 iced = { workspace = true }
 iced_wgpu = { workspace = true }
+iced_winit = { workspace = true }
 tauri = { workspace = true }
 tauri-plugin-log = "2"
 tauri-plugin-iced = { path = "../../tauri-pluginiced" }

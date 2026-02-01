@@ -22,37 +22,32 @@ use tauri_runtime_wry::{Context, Message, Plugin, PluginBuilder, WindowMessage};
 use tauri_runtime_wry::{EventLoopIterationContext, WebContextStore};
 
 /// Wrapper for staging IcedWindow to handle race conditions during window creation.
-pub struct StagingWindowWrapper<M, C: IcedControls<Message = M>> {
-    pub window: Option<(String, IcedWindow<M, C>)>,
+pub struct StagingWindowWrapper<M> {
+    pub window: Option<(String, IcedWindow<M>)>,
 }
 
 /// Builder for creating the Iced plugin instance.
 ///
 /// This implements the Tauri PluginBuilder trait.
-pub struct Builder<M, C: IcedControls<Message = M>> {
+pub struct Builder<M> {
     app: AppHandle,
-    phantom: std::marker::PhantomData<(M, C)>, // this does nothing, just keeps compiler happy
+    _phantom: std::marker::PhantomData<M>, // this does nothing, just keeps compiler happy
 }
 
-impl<M, C: IcedControls<Message = M>> Builder<M, C> {
+impl<M> Builder<M> {
     pub fn new(app: AppHandle) -> Self {
         Self {
             app,
-            phantom: PhantomData,
+            _phantom: PhantomData,
         }
     }
 }
 
-impl<
-        T: 'static + UserEvent + std::fmt::Debug,
-        M: 'static,
-        C: IcedControls<Message = M> + 'static,
-    > PluginBuilder<T> for Builder<M, C>
-{
-    type Plugin = IcedPlugin<T, M, C>;
+impl<T: 'static + UserEvent + std::fmt::Debug, M: 'static> PluginBuilder<T> for Builder<M> {
+    type Plugin = IcedPlugin<T, M>;
 
     fn build(self, _: Context<T>) -> Self::Plugin {
-        let iced_window_map: Arc<Mutex<HashMap<String, IcedWindow<M, C>>>> =
+        let iced_window_map: Arc<Mutex<HashMap<String, IcedWindow<M>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let staging_window = Arc::new(Mutex::new(StagingWindowWrapper { window: None }));
         self.app.manage(iced_window_map.clone());
@@ -62,19 +57,19 @@ impl<
 }
 
 /// The Iced plugin instance that hooks into Tauri's event loop.
-pub struct IcedPlugin<T: UserEvent + std::fmt::Debug, M, C: IcedControls<Message = M>> {
+pub struct IcedPlugin<T: UserEvent + std::fmt::Debug, M> {
     #[allow(dead_code)]
     app: AppHandle,
-    staging_window: Arc<Mutex<StagingWindowWrapper<M, C>>>,
-    windows: Arc<Mutex<HashMap<String, IcedWindow<M, C>>>>,
+    staging_window: Arc<Mutex<StagingWindowWrapper<M>>>,
+    windows: Arc<Mutex<HashMap<String, IcedWindow<M>>>>,
     _phantom: std::marker::PhantomData<T>, // this does nothing, just keeps compiler happy
 }
 
-impl<T: UserEvent + std::fmt::Debug, M, C: IcedControls<Message = M>> IcedPlugin<T, M, C> {
+impl<T: UserEvent + std::fmt::Debug, M> IcedPlugin<T, M> {
     fn new(
         app: AppHandle,
-        staging_window: Arc<Mutex<StagingWindowWrapper<M, C>>>,
-        windows: Arc<Mutex<HashMap<String, IcedWindow<M, C>>>>,
+        staging_window: Arc<Mutex<StagingWindowWrapper<M>>>,
+        windows: Arc<Mutex<HashMap<String, IcedWindow<M>>>>,
     ) -> Self {
         Self {
             app,
@@ -177,18 +172,18 @@ pub trait AppHandleExt {
     /// # Note
     /// The controls implementation must use `Message = ()` and override `handle_event`
     /// instead of `update` for event handling.
-    fn create_iced_window<M: 'static, C: IcedControls<Message = M> + 'static>(
+    fn create_iced_window<M: 'static>(
         &self,
         label: &str,
-        controls: C,
+        controls: Box<dyn IcedControls<Message = M> + Send + Sync>,
     ) -> Result<(), Error>;
 }
 
 impl AppHandleExt for AppHandle {
-    fn create_iced_window<M: 'static, C: IcedControls<Message = M> + 'static>(
+    fn create_iced_window<M: 'static>(
         &self,
         label: &str,
-        controls: C,
+        controls: Box<dyn IcedControls<Message = M> + Send + Sync>,
     ) -> Result<(), Error> {
         let window = self
             .get_window(label)
@@ -224,7 +219,7 @@ impl AppHandleExt for AppHandle {
         };
 
         let staging_window = self
-            .try_state::<Arc<Mutex<StagingWindowWrapper<M, C>>>>()
+            .try_state::<Arc<Mutex<StagingWindowWrapper<M>>>>()
             .ok_or_else(|| anyhow::anyhow!("TauriPluginIced is not initialized"))?;
 
         let mut stage = staging_window.lock().unwrap();
@@ -234,9 +229,7 @@ impl AppHandleExt for AppHandle {
     }
 }
 
-impl<T: UserEvent + std::fmt::Debug, M, C: IcedControls<Message = M>> Plugin<T>
-    for IcedPlugin<T, M, C>
-{
+impl<T: UserEvent + std::fmt::Debug, M> Plugin<T> for IcedPlugin<T, M> {
     fn on_event(
         &mut self,
         event: &Event<Message<T>>,
@@ -264,7 +257,6 @@ impl<T: UserEvent + std::fmt::Debug, M, C: IcedControls<Message = M>> Plugin<T>
                 window_id,
                 ..
             } => {
-
                 if let Some(label) = Self::get_label_from_tao_id(*window_id, &context) {
                     self.transfer_staging_window(&label);
 
@@ -299,7 +291,23 @@ impl<T: UserEvent + std::fmt::Debug, M, C: IcedControls<Message = M>> Plugin<T>
 
                     if let Some(iced_window) = self.windows.lock().unwrap().get_mut(&label) {
                         iced_window.process_events();
-                        iced_window.render_with_retry(&self.app);
+
+                        // Render and get mouse interaction for cursor updates
+                        if let Some(mouse_interaction) = iced_window.render_with_retry(&self.app) {
+                            // Convert Iced mouse interaction to Tauri cursor icon
+                            let cursor_icon = Self::convert_cursor_icon(&mouse_interaction);
+
+                            // Get the Tauri window ID from tao window ID
+                            if let Some(tauri_window_id) =
+                                Self::get_id_from_tao_id(*window_id, &context)
+                            {
+                                // Send cursor icon update message to the window
+                                let _ = proxy.send_event(Message::Window(
+                                    tauri_window_id,
+                                    WindowMessage::SetCursorIcon(cursor_icon),
+                                ));
+                            }
+                        }
                     }
                 }
 

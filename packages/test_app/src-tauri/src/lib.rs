@@ -10,20 +10,20 @@ struct Counter {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum Message {
+enum CounterMessage {
     Increment,
     Decrement,
 }
 
 impl IcedControls for Counter {
-    type Message = Message;
+    type Message = CounterMessage;
 
     fn view(&self) -> iced::Element<'_, Self::Message, Theme, Renderer> {
         column![
             text("Counter: ").size(30),
             text(self.value).size(30),
-            button("+").on_press(Message::Increment),
-            button("-").on_press(Message::Decrement),
+            button("+").on_press(CounterMessage::Increment),
+            button("-").on_press(CounterMessage::Decrement),
         ]
         .spacing(20)
         .padding(20)
@@ -32,8 +32,8 @@ impl IcedControls for Counter {
 
     fn update(&mut self, message: Self::Message) {
         match message {
-            Message::Increment => self.value += 1,
-            Message::Decrement => self.value -= 1,
+            CounterMessage::Increment => self.value += 1,
+            CounterMessage::Decrement => self.value -= 1,
         }
     }
 }
@@ -48,7 +48,7 @@ fn create_iced_window(app_handle: tauri::AppHandle) -> Result<(), String> {
     log::info!("Created iced window");
 
     app_handle
-        .create_iced_window("iced_window", Counter::default())
+        .create_iced_window("iced_window", Box::new(Counter::default()))
         .map_err(|e| format!("Failed to create iced window: {}", e))?;
 
     Ok(())
@@ -68,8 +68,7 @@ pub fn run() {
             }
 
             log::info!("Iced Tauri Example started");
-            let plugin =
-                tauri_plugin_iced::Builder::<Message, Counter>::new(app.handle().to_owned());
+            let plugin = tauri_plugin_iced::Builder::<CounterMessage>::new(app.handle().to_owned());
             app.wry_plugin(plugin);
 
             let wind = tauri::Window::builder(app, "main")
@@ -78,7 +77,7 @@ pub fn run() {
             let _ = wind.show();
 
             app.handle()
-                .create_iced_window("main", Counter::default())?;
+                .create_iced_window("main", Box::new(Counter::default()))?;
 
             Ok(())
         })

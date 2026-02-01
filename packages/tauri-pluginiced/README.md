@@ -7,6 +7,7 @@ A Tauri plugin for integrating the [Iced](https://github.com/iced-rs/iced) GUI f
 - **Native Iced rendering**: Render Iced's retained-mode UI in Tauri windows
 - **GPU acceleration**: Uses WGPU for hardware-accelerated rendering
 - **Multiple windows**: Support for multiple independent Iced windows with separate state
+- **Flexible UI types**: Each window can use different concrete IcedControls implementations
 - **Event handling**: Automatic conversion of Tauri events to Iced events
 - **Thread-safe**: Uses `Arc<Mutex<>>` for concurrent window access
 - **Cursor management**: Automatic cursor icon updates based on UI state
@@ -26,7 +27,9 @@ iced = { version = "0.13", features = ["wgpu"] }
 
 ### 1. Implement the IcedControls Trait
 
-Define your UI state and behavior by implementing the `IcedControls` trait:
+Define your UI state and behavior by implementing the `IcedControls` trait.
+
+For simple use cases, you can use `Message = ()` and implement `handle_event`:
 
 ```rust
 use tauri_plugin_iced::IcedControls;
@@ -37,6 +40,33 @@ struct MyControls {
     count: i32,
 }
 
+impl IcedControls for MyControls {
+    type Message = ();
+
+    fn view(&self) -> iced::Element<Self::Message> {
+        column![
+            text("Count: ").size(30),
+            text(self.count).size(30),
+            button("+").on_press(()),
+            button("-").on_press(()),
+        ]
+        .spacing(20)
+        .padding(20)
+        .into()
+    }
+
+    fn handle_event(&mut self, event: &iced_winit::core::Event) {
+        // Handle events directly without a Message enum
+        if let iced_winit::core::Event::Mouse(iced::mouse::Event::ButtonPressed(_)) = event {
+            self.count += 1;
+        }
+    }
+}
+```
+
+For more complex UIs, you can define a custom Message type and implement `update`:
+
+```rust
 #[derive(Debug, Clone, Copy)]
 enum Message {
     Increment,
@@ -72,17 +102,33 @@ impl IcedControls for MyControls {
 Register the plugin with your Tauri app:
 
 ```rust
-use tauri_pluginiced::Builder;
+use tauri_plugin_iced::Builder;
 
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
-            // Create the plugin instance
-            let plugin = Builder::new(app.handle().to_owned()).build()?;
-            
-            // Register with Tauri's event loop
-            app.handle().wry_plugin(plugin);
-            
+            // Initialize the plugin with your Message type
+            let plugin = Builder::<()>::new(app.handle().to_owned());
+            app.wry_plugin(plugin);
+
+            Ok(())
+        })
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+```
+
+If you're using a custom Message type:
+
+```rust
+use tauri_plugin_iced::Builder;
+
+fn main() {
+    tauri::Builder::default()
+        .setup(|app| {
+            let plugin = Builder::<MyMessage>::new(app.handle().to_owned());
+            app.wry_plugin(plugin);
+
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -99,24 +145,27 @@ fn main() {
     tauri::Builder::default()
         .setup(|app| {
             // ... plugin initialization ...
-            
+
             // Create a Tauri window
-            let window = tauri::WindowBuilder::new(
-                app,
-                "main",
-                tauri::WindowUrl::App("index.html".into())
-            )
-            .title("My Iced Window")
-            .build()?;
-            
+            let window = tauri::Window::builder(app, "main")
+                .title("My Iced Window")
+                .build()?;
+
             // Attach Iced rendering to the window
             app.handle().create_iced_window("main", Box::new(MyControls::default()))?;
-            
+
             Ok(())
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+```
+
+You can create multiple windows with different control types:
+
+```rust
+app.handle().create_iced_window("main", Box::new(Counter::default()))?;
+app.handle().create_iced_window("settings", Box::new(Settings::default()))?;
 ```
 
 ## API Reference
@@ -126,16 +175,54 @@ fn main() {
 The core trait for defining Iced UI behavior.
 
 ```rust
-pub trait IcedControls {
+pub trait IcedControls: Send + Sync {
     type Message;
 
     fn view(&self) -> Element<Self::Message>;
     fn update(&mut self, message: Self::Message);
-    fn handle_event(&mut self, event: &iced_winit::core::Event) {
-        // Optional: Handle raw Iced events
-    }
+    fn handle_event(&mut self, event: &iced_winit::core::Event) {}
+    fn background_color(&self) -> Color { Color::BLACK }
 }
 ```
+
+- `type Message`: The enum type for UI events (can be `()` for simple cases)
+- `view(&self)`: Build UI from current state
+- `update(&mut self, message)`: Handle state changes (called when Message is not `()`)
+- `handle_event(&mut self, event)`: Process raw Iced events (useful with `Message = ()`)
+- `background_color(&self)`: (Optional) Set background color for the window
+
+### create_iced_window()
+
+Attaches Iced rendering to an existing Tauri window.
+
+```rust
+app.handle().create_iced_window(
+    label: &str,
+    controls: Box<dyn IcedControls<Message = M> + Send + Sync>,
+) -> Result<(), Error>
+```
+
+**Parameters:**
+- `label`: The identifier of the Tauri window to attach Iced to
+- `controls`: Boxed instance of your `IcedControls` implementation (must use `Send + Sync`)
+
+**Returns:** `Result<(), Error>` - Success or error if window not found
+
+**Note:** The `Message` type must match the `M` type used in `Builder<M>`.
+
+### Builder
+
+Builder for creating the plugin instance.
+
+```rust
+let plugin = Builder::<M>::new(app_handle);
+app.wry_plugin(plugin);
+```
+
+**Type Parameter:**
+- `M`: The Message type shared across all Iced windows (use `()` if using `handle_event`)
+
+**Note:** The builder does not require calling `.build()` - pass it directly to `app.wry_plugin()`.
 
 - `type Message`: The enum type for UI events
 - `view(&self)`: Build the UI from current state

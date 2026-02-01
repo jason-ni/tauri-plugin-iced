@@ -6,15 +6,18 @@ use anyhow::Error;
 use iced_core::mouse;
 use iced_wgpu::graphics::Viewport;
 use iced_winit::core::Event;
-use iced_winit::runtime::user_interface::{Cache, UserInterface};
+use iced_winit::runtime::user_interface::{Cache, State, UserInterface};
 use iced_winit::Clipboard;
 use tauri::AppHandle;
 use tauri_runtime::dpi::PhysicalSize;
 use tauri_runtime_wry::tao::event::WindowEvent;
 
-pub struct IcedWindow<M, C: IcedControls<Message = M>> {
+// Type alias for mouse interaction (cursor icon)
+pub type MouseInteraction = mouse::Interaction;
+
+pub struct IcedWindow<M> {
     pub label: String,
-    pub controls: C,
+    pub controls: Box<dyn IcedControls<Message = M> + Send + Sync>,
     pub renderer: Renderer,
     pub viewport: Viewport,
     pub events: Vec<Event>,
@@ -27,8 +30,8 @@ pub struct IcedWindow<M, C: IcedControls<Message = M>> {
     pub resized: bool,
 }
 
-unsafe impl<M, C: IcedControls<Message = M>> Send for IcedWindow<M, C> {}
-unsafe impl<M, C: IcedControls<Message = M>> Sync for IcedWindow<M, C> {}
+unsafe impl<M> Send for IcedWindow<M> {}
+unsafe impl<M> Sync for IcedWindow<M> {}
 
 fn is_relevant_event(event: &WindowEvent) -> bool {
     matches!(
@@ -41,7 +44,7 @@ fn is_relevant_event(event: &WindowEvent) -> bool {
     )
 }
 
-impl<M, C: IcedControls<Message = M>> IcedWindow<M, C> {
+impl<M> IcedWindow<M> {
     pub fn handle_event(&mut self, event: &WindowEvent) -> bool {
         if !is_relevant_event(event) {
             return false;
@@ -97,9 +100,9 @@ impl<M, C: IcedControls<Message = M>> IcedWindow<M, C> {
         }
     }
 
-    pub fn process_events(&mut self) {
+    pub fn process_events(&mut self) -> Option<MouseInteraction> {
         if self.events.is_empty() {
-            return;
+            return None;
         }
 
         let messages = std::mem::take(&mut self.events);
@@ -117,7 +120,7 @@ impl<M, C: IcedControls<Message = M>> IcedWindow<M, C> {
 
         let mut control_messages = std::vec::Vec::new();
 
-        let _ = interface.update(
+        let (state, _) = interface.update(
             &messages,
             self.cursor,
             self.renderer.iced_renderer(),
@@ -130,9 +133,19 @@ impl<M, C: IcedControls<Message = M>> IcedWindow<M, C> {
         for message in control_messages {
             self.controls.update(message);
         }
+
+        // Return mouse interaction for cursor updates
+        if let State::Updated {
+            mouse_interaction, ..
+        } = state
+        {
+            Some(mouse_interaction)
+        } else {
+            None
+        }
     }
 
-    pub fn render(&mut self, _app_handle: &AppHandle) -> Result<(), Error> {
+    pub fn render(&mut self, _app_handle: &AppHandle) -> Result<Option<MouseInteraction>, Error> {
         if self.resized {
             self.renderer.gpu.resize(self.size.width, self.size.height);
             self.viewport = create_viewport(self.size.width, self.size.height, self.scale_factor);
@@ -165,7 +178,7 @@ impl<M, C: IcedControls<Message = M>> IcedWindow<M, C> {
             self.renderer.iced_renderer(),
         );
 
-        let (_, _) = interface.update(
+        let (state, _) = interface.update(
             &[Event::Window(iced_core::window::Event::RedrawRequested(
                 iced_core::time::Instant::now(),
             ))],
@@ -193,21 +206,27 @@ impl<M, C: IcedControls<Message = M>> IcedWindow<M, C> {
 
         frame_and_view.surface_texture.present();
 
-        Ok(())
+        // Return mouse interaction for cursor updates
+        if let State::Updated {
+            mouse_interaction, ..
+        } = state
+        {
+            Ok(Some(mouse_interaction))
+        } else {
+            Ok(None)
+        }
     }
 
-    pub fn render_with_retry(&mut self, app_handle: &AppHandle) {
+    pub fn render_with_retry(&mut self, app_handle: &AppHandle) -> Option<MouseInteraction> {
         match self.render(app_handle) {
-            Ok(_) => {}
+            Ok(mouse_interaction) => mouse_interaction,
             Err(e) => {
                 if let Some(surface_error) = e.downcast_ref::<iced_wgpu::wgpu::SurfaceError>() {
-                    match surface_error {
-                        iced_wgpu::wgpu::SurfaceError::OutOfMemory => {
-                            panic!("Swapchain error: {surface_error}. Rendering cannot continue.")
-                        }
-                        _ => {}
+                    if surface_error == &iced_wgpu::wgpu::SurfaceError::OutOfMemory {
+                        panic!("Swapchain error: {surface_error}. Rendering cannot continue.")
                     }
                 }
+                None
             }
         }
     }
