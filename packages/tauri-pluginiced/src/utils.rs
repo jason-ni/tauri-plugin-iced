@@ -115,15 +115,21 @@ impl<M, C: IcedControls<Message = M>> IcedWindow<M, C> {
             self.renderer.iced_renderer(),
         );
 
-        let (_, _control_messages) = interface.update(
+        let mut control_messages = std::vec::Vec::new();
+
+        let _ = interface.update(
             &messages,
             self.cursor,
             self.renderer.iced_renderer(),
             &mut self.clipboard,
-            &mut std::vec::Vec::new(),
+            &mut control_messages,
         );
 
         self.cache = interface.into_cache();
+
+        for message in control_messages {
+            self.controls.update(message);
+        }
     }
 
     pub fn render(&mut self, _app_handle: &AppHandle) -> Result<(), Error> {

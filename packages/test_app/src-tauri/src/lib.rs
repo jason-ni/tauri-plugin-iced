@@ -1,7 +1,6 @@
 use iced::widget::{button, column, text};
 use iced::Theme;
 use iced_wgpu::Renderer;
-use tauri::{Window, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_iced::AppHandleExt;
 use tauri_plugin_iced::IcedControls;
 
@@ -42,8 +41,9 @@ impl IcedControls for Counter {
 #[tauri::command]
 fn create_iced_window(app_handle: tauri::AppHandle) -> Result<(), String> {
     let wind = tauri::Window::builder(&app_handle, "iced_window")
-    .build().map_err(|e| format!("Failed to create window: {}", e))?;
-    wind.show();
+        .build()
+        .map_err(|e| format!("Failed to create window: {}", e))?;
+    let _ = wind.show();
 
     log::info!("Created iced window");
 
@@ -73,8 +73,9 @@ pub fn run() {
             app.wry_plugin(plugin);
 
             let wind = tauri::Window::builder(app, "main")
-            .build().map_err(|e| format!("Failed to create window: {}", e))?;
-            wind.show();
+                .build()
+                .map_err(|e| format!("Failed to create window: {}", e))?;
+            let _ = wind.show();
 
             app.handle()
                 .create_iced_window("main", Counter::default())?;
