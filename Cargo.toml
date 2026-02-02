@@ -14,7 +14,7 @@ tauri-runtime = "2.7.1"
 tauri-runtime-wry = "2.7.2"
 
 # Iced dependencies (workspace with local path references)
-iced = { path = "../iced", features = ["wgpu", "canvas"] }
+iced = { path = "../iced", features = ["wgpu", "canvas", "image"] }
 iced_wgpu = { path = "../iced/wgpu", default-features = false }
 iced_winit = { path = "../iced/winit", default-features = false }
 iced_widget = { path = "../iced/widget" }

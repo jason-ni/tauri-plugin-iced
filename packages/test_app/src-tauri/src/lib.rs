@@ -1,33 +1,22 @@
 use iced::widget::canvas;
-use iced::widget::{button, column, stack, text, text_input};
-use iced::{Color, Theme};
+use iced::widget::{button, column, container, stack, text, text_input};
+use iced::{Color, ContentFit, Length, Theme};
 use tauri_plugin_iced::AppHandleExt;
 use tauri_plugin_iced::IcedControls;
 
-struct RandomWord {
-    word: String,
+struct ScreenshotData {
+    handle: iced::widget::image::Handle,
+    width: u32,
+    height: u32,
 }
 
-impl RandomWord {
-    const WORDS: [&'static str; 10] = [
-        "apple",
-        "banana",
-        "cherry",
-        "date",
-        "elderberry",
-        "fig",
-        "grape",
-        "honeydew",
-        "kiwi",
-        "lemon",
-    ];
+enum ViewerContent {
+    Screenshot(iced::widget::image::Handle),
+    Error(String),
+}
 
-    fn new() -> Self {
-        let word_index = rand::random::<usize>() % Self::WORDS.len();
-        RandomWord {
-            word: Self::WORDS[word_index].to_string(),
-        }
-    }
+struct ScreenshotViewer {
+    content: ViewerContent,
 }
 
 #[derive(Default)]
@@ -43,7 +32,7 @@ enum CounterMessage {
     Increment,
     Decrement,
     TextInputChanged(String),
-    CreateRandomWindow,
+    CaptureScreenshot,
 }
 
 impl IcedControls for Counter {
@@ -61,7 +50,7 @@ impl IcedControls for Counter {
                 text_input("Type here...", &self.text_input)
                     .on_input(|s| CounterMessage::TextInputChanged(s))
                     .padding(10),
-                button("Create Random Window").on_press(CounterMessage::CreateRandomWindow),
+                button("Take Screenshot").on_press(CounterMessage::CaptureScreenshot),
             ]
             .spacing(20)
             .padding(20),
@@ -81,15 +70,22 @@ impl IcedControls for Counter {
                 self.text_input = text;
                 log::info!("Text input changed: {}", self.text_input);
             }
-            CounterMessage::CreateRandomWindow => {
+            CounterMessage::CaptureScreenshot => {
                 if let Some(ref app_handle) = self.app_handle {
-                    self.window_counter += 1;
-                    let label = format!("window_{}", self.window_counter);
+                    let result = capture_primary_screen();
 
-                    log::info!("Creating random word window: {}", label);
+                    self.window_counter += 1;
+                    let label = format!("screenshot_{}", self.window_counter);
+
+                    log::info!("Creating screenshot window: {}", label);
+
+                    let (window_width, window_height) = match &result {
+                        Ok(data) => calculate_window_size(data.width, data.height),
+                        Err(_) => (800.0, 600.0),
+                    };
 
                     let wind = tauri::Window::builder(app_handle, &label)
-                        .inner_size(400.0, 300.0)
+                        .inner_size(window_width, window_height)
                         .build()
                         .map_err(|e| format!("Failed to create window: {}", e));
 
@@ -97,10 +93,10 @@ impl IcedControls for Counter {
                         Ok(w) => {
                             let _ = w.show();
 
-                            let random_word = RandomWord::new();
+                            let screenshot_viewer = ScreenshotViewer::new(result);
 
                             if let Err(e) =
-                                app_handle.create_iced_window(&label, Box::new(random_word))
+                                app_handle.create_iced_window(&label, Box::new(screenshot_viewer))
                             {
                                 log::error!("Failed to create iced window: {}", e);
                             }
@@ -112,53 +108,6 @@ impl IcedControls for Counter {
                 }
             }
         }
-    }
-}
-
-impl IcedControls for RandomWord {
-    type Message = CounterMessage;
-
-    fn view(&self) -> iced::Element<'_, Self::Message, Theme, iced::Renderer> {
-        canvas(self)
-            .width(iced::Length::Fill)
-            .height(iced::Length::Fill)
-            .into()
-    }
-
-    fn update(&mut self, _message: Self::Message) {}
-}
-
-impl<Message> canvas::Program<Message> for RandomWord {
-    type State = ();
-
-    fn mouse_interaction(
-        &self,
-        _state: &Self::State,
-        _bounds: iced::Rectangle,
-        _cursor: iced::mouse::Cursor,
-    ) -> iced::mouse::Interaction {
-        iced::mouse::Interaction::None
-    }
-
-    fn draw(
-        &self,
-        _state: &(),
-        render: &iced::Renderer,
-        _theme: &Theme,
-        bounds: iced::Rectangle,
-        _cursor: iced::mouse::Cursor,
-    ) -> Vec<canvas::Geometry<iced::Renderer>> {
-        let mut frame = canvas::Frame::new(render, bounds.size());
-
-        frame.fill_text(canvas::Text {
-            position: frame.center(),
-            content: self.word.clone(),
-            color: Color::from_rgb8(255, 255, 255),
-            size: 40.0.into(),
-            ..canvas::Text::default()
-        });
-
-        vec![frame.into_geometry()]
     }
 }
 
@@ -206,6 +155,101 @@ impl<Message> canvas::Program<Message> for Counter {
 
         vec![frame.into_geometry()]
     }
+}
+
+impl ScreenshotViewer {
+    fn new(result: Result<ScreenshotData, String>) -> Self {
+        let content = match result {
+            Ok(data) => {
+                log::info!(
+                    "Created ScreenshotViewer with screenshot: {}x{}",
+                    data.width,
+                    data.height
+                );
+                ViewerContent::Screenshot(data.handle)
+            }
+            Err(msg) => {
+                log::info!("Created ScreenshotViewer with error: {}", msg);
+                ViewerContent::Error(msg)
+            }
+        };
+        ScreenshotViewer { content }
+    }
+}
+
+impl IcedControls for ScreenshotViewer {
+    type Message = CounterMessage;
+
+    fn view(&self) -> iced::Element<'_, Self::Message, Theme, iced::Renderer> {
+        use iced::widget::image;
+
+        let element = match &self.content {
+            ViewerContent::Screenshot(handle) => {
+                log::info!("Rendering screenshot in viewer");
+                container(image(handle).content_fit(ContentFit::Contain))
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .into()
+            }
+            ViewerContent::Error(msg) => container(text(format!("Capture failed: {}", msg)))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .into(),
+        };
+
+        element
+    }
+
+    fn update(&mut self, _message: Self::Message) {}
+}
+
+fn capture_primary_screen() -> Result<ScreenshotData, String> {
+    use xcap::Monitor;
+
+    let monitors = Monitor::all().map_err(|e| format!("Failed to get screens: {}", e))?;
+
+    if monitors.is_empty() {
+        return Err("No screens found".to_string());
+    }
+
+    let monitor = &monitors[0];
+    let rgba_image = monitor
+        .capture_image()
+        .map_err(|e| format!("Failed to capture screen: {}", e))?;
+
+    let width = rgba_image.width();
+    let height = rgba_image.height();
+    let rgba_vec = rgba_image.into_raw();
+
+    log::info!(
+        "Captured screen: {}x{}, {} bytes",
+        width,
+        height,
+        rgba_vec.len()
+    );
+
+    let handle = iced::widget::image::Handle::from_rgba(width, height, rgba_vec);
+
+    log::info!("Created image handle directly from xcap data");
+
+    Ok(ScreenshotData {
+        handle,
+        width,
+        height,
+    })
+}
+
+fn calculate_window_size(screen_w: u32, screen_h: u32) -> (f64, f64) {
+    const MAX_WIDTH: f64 = 1200.0;
+    const MAX_HEIGHT: f64 = 800.0;
+
+    let scale = (MAX_WIDTH / screen_w as f64)
+        .min(MAX_HEIGHT / screen_h as f64)
+        .min(1.0);
+
+    (screen_w as f64 * scale, screen_h as f64 * scale)
 }
 
 #[tauri::command]

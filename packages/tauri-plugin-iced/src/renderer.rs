@@ -4,8 +4,8 @@ use iced_wgpu::{wgpu, Engine, Renderer as WgpuRenderer};
 use iced_winit::core::{Font, Pixels};
 
 pub struct Renderer {
-    pub gpu: Gpu,
     pub renderer: IcedRenderer,
+    pub gpu: Gpu,
 }
 
 pub struct FrameAndView {
@@ -16,9 +16,9 @@ pub struct FrameAndView {
 pub struct Gpu {
     _instance: wgpu::Instance,
     adapter: wgpu::Adapter,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
     surface: wgpu::Surface<'static>,
+    queue: wgpu::Queue,
+    device: wgpu::Device,
     surface_format: wgpu::TextureFormat,
 }
 
@@ -89,9 +89,8 @@ impl Gpu {
             .formats
             .iter()
             .copied()
-            .find(wgpu::TextureFormat::is_srgb)
-            .or_else(|| surface_capabilities.formats.first().copied())
-            .ok_or_else(|| anyhow::anyhow!("No supported texture format"))?;
+            .find(|f| !matches!(f, wgpu::TextureFormat::Bgra8UnormSrgb | wgpu::TextureFormat::Rgba8UnormSrgb))
+            .unwrap_or_else(|| surface_capabilities.formats[0]);
 
         let alpha_mode = surface_capabilities
             .alpha_modes
@@ -175,3 +174,4 @@ impl Gpu {
         self.surface_format
     }
 }
+

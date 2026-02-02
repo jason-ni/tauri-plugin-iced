@@ -210,3 +210,24 @@ impl<M> IcedWindow<M> {
         }
     }
 }
+
+
+pub fn set_window_transparent(window: &tauri::Window) {
+    #[cfg(target_os = "macos")]
+    {
+        use cocoa::appkit::{NSColor, NSWindow};
+        use cocoa::base::{id, nil};
+
+        let ns_window = window.ns_window().unwrap() as id;
+        unsafe {
+            let bg_color = NSColor::colorWithRed_green_blue_alpha_(
+                nil,
+                0.0 / 255.0,
+                0.0 / 255.0,
+                0.0 / 255.0,
+                0.0,
+            );
+            ns_window.setBackgroundColor_(bg_color);
+        }
+    }
+}

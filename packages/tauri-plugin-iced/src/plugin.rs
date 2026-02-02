@@ -190,6 +190,8 @@ impl AppHandleExt for AppHandle {
             .get_window(label)
             .ok_or_else(|| anyhow::anyhow!("No window found with label: {}", label))?;
 
+        crate::utils::set_window_transparent(&window);
+
         let scale_factor = window.scale_factor().unwrap_or(1.0) as f32;
         let PhysicalSize { width, height } = window.inner_size()?;
 
@@ -244,13 +246,17 @@ impl<T: UserEvent + std::fmt::Debug, M> Plugin<T> for IcedPlugin<T, M> {
         match event {
             Event::LoopDestroyed => false,
             Event::WindowEvent {
-                event: TaoWindowEvent::Destroyed { .. },
+                event: TaoWindowEvent::CloseRequested,
                 window_id,
                 ..
             } => {
                 if let Some(label) = Self::get_label_from_tao_id(*window_id, &context) {
                     let mut windows = self.windows.lock().unwrap();
-                    windows.remove(&label);
+                    log::info!("Window with label {} destroyed, windows count before: {}", label, windows.len());
+                    if let Some(w) = windows.remove(&label) {
+                        drop(w);
+                    }
+                    log::info!("Windows count after: {}", windows.len());
                 }
                 false
             }
