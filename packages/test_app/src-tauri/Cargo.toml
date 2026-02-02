@@ -22,7 +22,10 @@ serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 iced = { workspace = true }
+iced_core = { workspace = true }
+iced_graphics = { workspace = true }
 iced_wgpu = { workspace = true }
+iced_widget = { workspace = true }
 iced_winit = { workspace = true }
 tauri = { workspace = true }
 tauri-plugin-log = "2"

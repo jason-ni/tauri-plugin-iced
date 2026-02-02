@@ -1,7 +1,7 @@
 use crate::event_conversion::{convert_modifiers, convert_window_event, create_viewport};
 use crate::renderer::Renderer;
 use crate::scene::{clear, Scene};
-use crate::IcedControls;
+use crate::{IcedControls, convert_mouse_position};
 use anyhow::Error;
 use iced_core::keyboard;
 use iced_core::mouse;
@@ -59,6 +59,9 @@ impl<M> IcedWindow<M> {
             WindowEvent::ModifiersChanged(new_modifiers) => {
                 self.modifiers = convert_modifiers(&new_modifiers);
             }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor = mouse::Cursor::Available(convert_mouse_position(position.x, position.y, self.scale_factor))
+            }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 self.scale_factor = *scale_factor as f32;
                 self.resized = true;
@@ -70,9 +73,7 @@ impl<M> IcedWindow<M> {
             _ => {}
         }
 
-        log::info!("== converting event to iced event: {:?}", event);
         if let Some(iced_event) = convert_window_event(event, self.scale_factor, self.modifiers) {
-            log::info!("== iced event: {:?}", iced_event);
             self.events.push(iced_event);
             true
         } else {
@@ -87,7 +88,7 @@ impl<M> IcedWindow<M> {
 
         let messages = std::mem::take(&mut self.events);
 
-        log::info!("== processing events: {:?}", messages);
+        let mut control_messages = std::vec::Vec::new();
 
         let mut interface = UserInterface::build(
             self.controls.view(),
@@ -95,8 +96,6 @@ impl<M> IcedWindow<M> {
             std::mem::take(&mut self.cache),
             self.renderer.iced_renderer(),
         );
-
-        let mut control_messages = std::vec::Vec::new();
 
         let (state, _) = interface.update(
             &messages,
@@ -107,7 +106,6 @@ impl<M> IcedWindow<M> {
         );
 
         self.cache = interface.into_cache();
-
         for message in control_messages {
             self.controls.update(message);
         }
@@ -121,6 +119,7 @@ impl<M> IcedWindow<M> {
         } else {
             None
         }
+
     }
 
     pub fn render(&mut self, _app_handle: &AppHandle) -> Result<Option<MouseInteraction>, Error> {
@@ -175,16 +174,17 @@ impl<M> IcedWindow<M> {
 
         self.cache = interface.into_cache();
 
-        self.renderer.iced_renderer().present(
+        if let iced::Renderer::Primary(wgpu_renderer) = self.renderer.iced_renderer() {
+            wgpu_renderer.present(
             None,
             frame_and_view.surface_texture.texture.format(),
             &frame_and_view.view,
             &self.viewport,
-        );
+            );
+        }
 
         frame_and_view.surface_texture.present();
 
-        // Return mouse interaction for cursor updates
         if let State::Updated {
             mouse_interaction, ..
         } = state
@@ -193,6 +193,7 @@ impl<M> IcedWindow<M> {
         } else {
             Ok(None)
         }
+
     }
 
     pub fn render_with_retry(&mut self, app_handle: &AppHandle) -> Option<MouseInteraction> {

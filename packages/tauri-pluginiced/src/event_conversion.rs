@@ -15,11 +15,11 @@ pub fn convert_mouse_position(
     physical_x: f64,
     physical_y: f64,
     scale_factor: f32,
-) -> Option<Point> {
-    Some(Point::new(
+) -> Point {
+    Point::new(
         physical_x as f32 / scale_factor,
         physical_y as f32 / scale_factor,
-    ))
+    )
 }
 
 /// Convert Tauri mouse button to Iced pointer button.

@@ -5,13 +5,12 @@ pub mod scene;
 pub mod utils;
 
 use iced::{theme::Theme, Element};
-use iced_wgpu::Renderer;
 use iced_winit::core::Color;
 
 pub trait IcedControls: Send + Sync {
     type Message;
 
-    fn view(&self) -> Element<'_, Self::Message, Theme, Renderer>;
+    fn view(&self) -> Element<'_, Self::Message, Theme, iced::Renderer>;
 
     fn update(&mut self, message: Self::Message);
 

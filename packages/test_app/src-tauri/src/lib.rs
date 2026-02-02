@@ -1,6 +1,6 @@
 use iced::widget::{button, column, text, text_input};
-use iced::Theme;
-use iced_wgpu::Renderer;
+use iced::{Color, Theme};
+use iced::widget::canvas;
 use tauri_plugin_iced::AppHandleExt;
 use tauri_plugin_iced::IcedControls;
 
@@ -20,8 +20,9 @@ enum CounterMessage {
 impl IcedControls for Counter {
     type Message = CounterMessage;
 
-    fn view(&self) -> iced::Element<'_, Self::Message, Theme, Renderer> {
+    fn view(&self) -> iced::Element<'_, Self::Message, Theme, iced::Renderer> {
         column![
+            canvas(self).width(100.0).height(100.0),
             text("Counter: ").size(30),
             text(self.value).size(30),
             button("+").on_press(CounterMessage::Increment),
@@ -45,6 +46,24 @@ impl IcedControls for Counter {
                 log::info!("Text input changed: {}", self.text_input);
             }
         }
+    }
+}
+
+impl<Message> canvas::Program<Message> for Counter {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &(),
+        render: &iced::Renderer,
+        _theme: &Theme,
+        bounds: iced_core::Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> Vec<canvas::Geometry<iced::Renderer>> {
+        let mut frame = canvas::Frame::new(render, bounds.size());
+        let circle = canvas::Path::circle(frame.center(), 10.0);
+        frame.fill(&circle, Color::WHITE);
+        vec![frame.into_geometry()]
     }
 }
 

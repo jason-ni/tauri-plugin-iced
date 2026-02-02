@@ -1,5 +1,6 @@
 use anyhow::Error;
-use iced_wgpu::{wgpu, Engine, Renderer as IcedRenderer};
+use iced::Renderer as IcedRenderer;
+use iced_wgpu::{wgpu, Engine, Renderer as WgpuRenderer};
 use iced_winit::core::{Font, Pixels};
 
 pub struct Renderer {
@@ -38,7 +39,7 @@ impl Renderer {
             iced_wgpu::graphics::Shell::headless(),
         );
 
-        let renderer = IcedRenderer::new(engine, Font::default(), Pixels::from(16));
+        let renderer = IcedRenderer::Primary(WgpuRenderer::new(engine, Font::default(), Pixels::from(16)));
 
         Ok(Self { gpu, renderer })
     }
