@@ -157,6 +157,7 @@ dependencies = [
  "iced_widget",
  "iced_winit",
  "log",
+ "rand 0.8.5",
  "serde",
  "serde_json",
  "tauri",
