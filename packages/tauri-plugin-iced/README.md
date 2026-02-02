@@ -29,42 +29,17 @@ iced = { version = "0.13", features = ["wgpu"] }
 
 Define your UI state and behavior by implementing the `IcedControls` trait.
 
-For simple use cases, you can use `Message = ()` and implement `handle_event`:
+Define a custom Message type for your UI events:
 
 ```rust
-use tauri_plugin_iced::IcedControls;
-use iced::widget::{button, column, text};
-
-#[derive(Default)]
-struct MyControls {
-    count: i32,
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    Increment,
+    Decrement,
 }
 
 impl IcedControls for MyControls {
-    type Message = ();
-
-    fn view(&self) -> iced::Element<Self::Message> {
-        column![
-            text("Count: ").size(30),
-            text(self.count).size(30),
-            button("+").on_press(()),
-            button("-").on_press(()),
-        ]
-        .spacing(20)
-        .padding(20)
-        .into()
-    }
-
-    fn handle_event(&mut self, event: &iced_winit::core::Event) {
-        // Handle events directly without a Message enum
-        if let iced_winit::core::Event::Mouse(iced::mouse::Event::ButtonPressed(_)) = event {
-            self.count += 1;
-        }
-    }
-}
-```
-
-For more complex UIs, you can define a custom Message type and implement `update`:
+    type Message = Message;
 
 ```rust
 #[derive(Debug, Clone, Copy)]
@@ -180,15 +155,13 @@ pub trait IcedControls: Send + Sync {
 
     fn view(&self) -> Element<Self::Message>;
     fn update(&mut self, message: Self::Message);
-    fn handle_event(&mut self, event: &iced_winit::core::Event) {}
     fn background_color(&self) -> Color { Color::BLACK }
 }
 ```
 
-- `type Message`: The enum type for UI events (can be `()` for simple cases)
+- `type Message`: The enum type for UI events
 - `view(&self)`: Build UI from current state
-- `update(&mut self, message)`: Handle state changes (called when Message is not `()`)
-- `handle_event(&mut self, event)`: Process raw Iced events (useful with `Message = ()`)
+- `update(&mut self, message)`: Handle state changes
 - `background_color(&self)`: (Optional) Set background color for the window
 
 ### create_iced_window()
@@ -220,14 +193,9 @@ app.wry_plugin(plugin);
 ```
 
 **Type Parameter:**
-- `M`: The Message type shared across all Iced windows (use `()` if using `handle_event`)
+- `M`: The Message type shared across all Iced windows
 
 **Note:** The builder does not require calling `.build()` - pass it directly to `app.wry_plugin()`.
-
-- `type Message`: The enum type for UI events
-- `view(&self)`: Build the UI from current state
-- `update(&mut self, message)`: Handle state changes
-- `handle_event(&mut self, event)`: (Optional) Process raw Iced events
 
 ### create_iced_window()
 

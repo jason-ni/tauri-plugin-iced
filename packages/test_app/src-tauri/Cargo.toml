@@ -29,5 +29,5 @@ iced_widget = { workspace = true }
 iced_winit = { workspace = true }
 tauri = { workspace = true }
 tauri-plugin-log = "2"
-tauri-plugin-iced = { path = "../../tauri-pluginiced" }
+tauri-plugin-iced = { path = "../../tauri-plugin-iced" }
 tauri-runtime-wry = "2.7.2"
