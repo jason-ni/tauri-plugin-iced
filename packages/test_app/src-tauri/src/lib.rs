@@ -185,7 +185,6 @@ impl IcedControls for ScreenshotViewer {
 
         let element = match &self.content {
             ViewerContent::Screenshot(handle) => {
-                log::info!("Rendering screenshot in viewer");
                 container(image(handle).content_fit(ContentFit::Contain))
                     .width(Length::Fill)
                     .height(Length::Fill)

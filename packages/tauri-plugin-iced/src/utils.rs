@@ -18,8 +18,9 @@ pub type MouseInteraction = mouse::Interaction;
 
 pub struct IcedWindow<M> {
     pub label: String,
+    pub window: tauri::Window,
     pub controls: Box<dyn IcedControls<Message = M> + Send + Sync>,
-    pub renderer: Renderer,
+    pub renderer: Option<Renderer>,
     pub viewport: Viewport,
     pub events: Vec<Event>,
     pub cache: Cache,
@@ -90,17 +91,19 @@ impl<M> IcedWindow<M> {
 
         let mut control_messages = std::vec::Vec::new();
 
+        let renderer = self.renderer.as_mut().expect("Renderer not initialized");
+
         let mut interface = UserInterface::build(
             self.controls.view(),
             self.viewport.logical_size(),
             std::mem::take(&mut self.cache),
-            self.renderer.iced_renderer(),
+            renderer.iced_renderer(),
         );
 
         let (state, _) = interface.update(
             &messages,
             self.cursor,
-            self.renderer.iced_renderer(),
+            renderer.iced_renderer(),
             &mut self.clipboard,
             &mut control_messages,
         );
@@ -123,20 +126,20 @@ impl<M> IcedWindow<M> {
     }
 
     pub fn render(&mut self, _app_handle: &AppHandle) -> Result<Option<MouseInteraction>, Error> {
+        let renderer = self.renderer.as_mut().expect("Renderer not initialized");
         if self.resized {
-            self.renderer.gpu.resize(self.size.width, self.size.height);
+            renderer.gpu_resource.resize(self.size.width, self.size.height);
             self.viewport = create_viewport(self.size.width, self.size.height, self.scale_factor);
             self.resized = false;
         }
 
-        let frame_and_view = self.renderer.gpu.get_frame()?;
 
-        let mut encoder = self
-            .renderer
-            .gpu
+        let mut encoder = renderer
+            .gpu_resource
             .device()
             .create_command_encoder(&iced_wgpu::wgpu::CommandEncoderDescriptor { label: None });
 
+        let frame_and_view = renderer.gpu_resource.get_frame()?;
         if let Some(scene) = &self.scene {
             let mut render_pass = clear(
                 &frame_and_view.view,
@@ -146,13 +149,13 @@ impl<M> IcedWindow<M> {
             scene.draw(&mut render_pass);
         }
 
-        self.renderer.gpu.queue().submit([encoder.finish()]);
+        renderer.gpu_resource.queue().submit([encoder.finish()]);
 
         let mut interface = UserInterface::build(
             self.controls.view(),
             self.viewport.logical_size(),
             std::mem::take(&mut self.cache),
-            self.renderer.iced_renderer(),
+            renderer.iced_renderer(),
         );
 
         let (state, _) = interface.update(
@@ -160,13 +163,13 @@ impl<M> IcedWindow<M> {
                 iced_core::time::Instant::now(),
             ))],
             self.cursor,
-            self.renderer.iced_renderer(),
+            renderer.iced_renderer(),
             &mut self.clipboard,
             &mut std::vec::Vec::new(),
         );
 
         interface.draw(
-            self.renderer.iced_renderer(),
+            renderer.iced_renderer(),
             &iced_winit::core::Theme::Dark,
             &iced_core::renderer::Style::default(),
             self.cursor,
@@ -174,7 +177,7 @@ impl<M> IcedWindow<M> {
 
         self.cache = interface.into_cache();
 
-        if let iced::Renderer::Primary(wgpu_renderer) = self.renderer.iced_renderer() {
+        if let iced::Renderer::Primary(wgpu_renderer) = renderer.iced_renderer() {
             wgpu_renderer.present(
             None,
             frame_and_view.surface_texture.texture.format(),

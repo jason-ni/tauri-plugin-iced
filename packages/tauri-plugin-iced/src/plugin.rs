@@ -1,7 +1,7 @@
 // Plugin implementation module
 
 use crate::event_conversion;
-use crate::renderer::Renderer;
+use crate::renderer::{GpuResource, Renderer};
 use crate::utils::IcedWindow;
 use crate::IcedControls;
 use anyhow::Error;
@@ -12,6 +12,7 @@ use iced_winit::Clipboard;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
+use std::cell::RefCell;
 use tauri::{AppHandle, Manager};
 use tauri_runtime::dpi::PhysicalSize;
 use tauri_runtime::window::CursorIcon;
@@ -48,10 +49,8 @@ impl<T: 'static + UserEvent + std::fmt::Debug, M: 'static> PluginBuilder<T> for 
     type Plugin = IcedPlugin<T, M>;
 
     fn build(self, _: Context<T>) -> Self::Plugin {
-        let iced_window_map: Arc<Mutex<HashMap<String, IcedWindow<M>>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+        let iced_window_map: HashMap<String, IcedWindow<M>> = HashMap::new();
         let staging_window = Arc::new(Mutex::new(StagingWindowWrapper { window: None }));
-        self.app.manage(iced_window_map.clone());
         self.app.manage(staging_window.clone());
         IcedPlugin::new(self.app.clone(), staging_window, iced_window_map)
     }
@@ -62,7 +61,9 @@ pub struct IcedPlugin<T: UserEvent + std::fmt::Debug, M> {
     #[allow(dead_code)]
     app: AppHandle,
     staging_window: Arc<Mutex<StagingWindowWrapper<M>>>,
-    windows: Arc<Mutex<HashMap<String, IcedWindow<M>>>>,
+    windows: RefCell<HashMap<String, IcedWindow<M>>>,
+    instance: RefCell<Option<wgpu::Instance>>,
+    adapter: RefCell<Option<wgpu::Adapter>>,
     _phantom: std::marker::PhantomData<T>, // this does nothing, just keeps compiler happy
 }
 
@@ -70,12 +71,14 @@ impl<T: UserEvent + std::fmt::Debug, M> IcedPlugin<T, M> {
     fn new(
         app: AppHandle,
         staging_window: Arc<Mutex<StagingWindowWrapper<M>>>,
-        windows: Arc<Mutex<HashMap<String, IcedWindow<M>>>>,
+        windows: HashMap<String, IcedWindow<M>>,
     ) -> Self {
         Self {
             app,
             staging_window,
-            windows,
+            windows: RefCell::new(windows),
+            adapter: RefCell::new(None),
+            instance: RefCell::new(None),
             _phantom: PhantomData,
         }
     }
@@ -138,18 +141,123 @@ impl<T: UserEvent + std::fmt::Debug, M> IcedPlugin<T, M> {
 
     /// Transfer staging window to main window map if labels match.
     fn transfer_staging_window(&mut self, label: &str) {
-        let mut windows = self.windows.lock().unwrap();
         let mut staging_window = self.staging_window.lock().unwrap();
 
-        if !windows.contains_key(label) {
+        if !self.windows.borrow().contains_key(label) {
             if let Some(staging_label_opt) = staging_window.window.as_ref().map(|(l, _)| l.clone())
             {
                 if label == staging_label_opt {
                     if let Some((staging_label, staging_win)) = staging_window.window.take() {
-                        windows.insert(staging_label, staging_win);
+                        self.windows.borrow_mut().insert(staging_label, staging_win);
                     }
                 }
             }
+        }
+    }
+
+    fn get_gpu_resources(
+        &self, 
+        window: impl Into<wgpu::SurfaceTarget<'static>>,
+        width: u32, height: u32,
+    ) -> Result<GpuResource, Error> {
+        if self.instance.borrow().is_none() {
+            let backend = wgpu::Backends::from_env().unwrap_or_default();
+            let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+                backends: backend,
+                ..Default::default()
+            });
+            self.instance.borrow_mut().replace(instance.clone());
+            let surface = instance.create_surface(window)?;
+
+            let (adapter, device, queue, surface, surface_capabilities) = tauri::async_runtime::block_on( async move {
+                let adapter = wgpu::util::initialize_adapter_from_env_or_default(&instance, Some(&surface)).await?;
+                let surface_capabilities = surface.get_capabilities(&adapter);
+                let adapter_features = adapter.features();
+                let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor {
+                        label: None,
+                        required_features: adapter_features & wgpu::Features::default(),
+                        required_limits: wgpu::Limits::default(),
+                        memory_hints: wgpu::MemoryHints::MemoryUsage,
+                        trace: wgpu::Trace::Off,
+                        experimental_features: wgpu::ExperimentalFeatures::disabled(),}).await?;
+                Ok::<_, Error>((adapter, device, queue, surface, surface_capabilities))
+            })?;
+            self.adapter.borrow_mut().replace(adapter.clone());
+            let surface_format = surface_capabilities
+            .formats
+            .iter()
+            .copied()
+            .find(|f| !matches!(f, wgpu::TextureFormat::Bgra8UnormSrgb | wgpu::TextureFormat::Rgba8UnormSrgb))
+            .unwrap_or_else(|| surface_capabilities.formats[0]);
+
+            let alpha_mode = surface_capabilities
+                .alpha_modes
+                .iter()
+                .copied()
+                .find(|m| *m != wgpu::CompositeAlphaMode::Opaque)
+                .unwrap_or(surface_capabilities.alpha_modes[0]);
+
+            surface.configure(
+                &device,
+                &wgpu::SurfaceConfiguration {
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    format: surface_format,
+                    width,
+                    height,
+                    present_mode: wgpu::PresentMode::AutoVsync,
+                    alpha_mode,
+                    view_formats: vec![],
+                    desired_maximum_frame_latency: 2,
+                },
+            );
+            Ok(GpuResource::new(device, queue, surface, surface_format, surface_capabilities))
+
+        } else {
+            let instance = self.instance.borrow();
+            let surface = instance.as_ref().unwrap().create_surface(window)?;
+
+            let adapter = self.adapter.borrow().as_ref().unwrap().clone();
+            let surface_capabilities = surface.get_capabilities(&adapter);
+            let adapter_features = adapter.features();
+
+            let (device, queue) = tauri::async_runtime::block_on(async move {
+                adapter.request_device(&wgpu::DeviceDescriptor {
+                    label: None,
+                    required_features: adapter_features & wgpu::Features::default(),
+                    required_limits: wgpu::Limits::default(),
+                    memory_hints: wgpu::MemoryHints::MemoryUsage,
+                    trace: wgpu::Trace::Off,
+                    experimental_features: wgpu::ExperimentalFeatures::disabled(),}).await
+            })?;
+
+            let surface_format = surface_capabilities
+            .formats
+            .iter()
+            .copied()
+            .find(|f| !matches!(f, wgpu::TextureFormat::Bgra8UnormSrgb | wgpu::TextureFormat::Rgba8UnormSrgb))
+            .unwrap_or_else(|| surface_capabilities.formats[0]);
+
+            let alpha_mode = surface_capabilities
+                .alpha_modes
+                .iter()
+                .copied()
+                .find(|m| *m != wgpu::CompositeAlphaMode::Opaque)
+                .unwrap_or(surface_capabilities.alpha_modes[0]);
+
+            surface.configure(
+                &device,
+                &wgpu::SurfaceConfiguration {
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    format: surface_format,
+                    width,
+                    height,
+                    present_mode: wgpu::PresentMode::AutoVsync,
+                    alpha_mode,
+                    view_formats: vec![],
+                    desired_maximum_frame_latency: 2,
+                },
+            );
+            Ok(GpuResource::new(device, queue, surface, surface_format, surface_capabilities))
         }
     }
 }
@@ -201,15 +309,11 @@ impl AppHandleExt for AppHandle {
         // Full clipboard integration requires winit window access
         let clipboard: Clipboard = Clipboard::unconnected();
 
-        let renderer: Renderer =
-            tauri::async_runtime::block_on(
-                async move { Renderer::new(window, width, height).await },
-            )?;
-
         let iced_window = IcedWindow {
             label: label.to_string(),
+            window,
             controls,
-            renderer,
+            renderer: None,
             viewport,
             events: std::vec::Vec::new(),
             cache: Cache::new(),
@@ -251,12 +355,11 @@ impl<T: UserEvent + std::fmt::Debug, M> Plugin<T> for IcedPlugin<T, M> {
                 ..
             } => {
                 if let Some(label) = Self::get_label_from_tao_id(*window_id, &context) {
-                    let mut windows = self.windows.lock().unwrap();
-                    log::info!("Window with label {} destroyed, windows count before: {}", label, windows.len());
-                    if let Some(w) = windows.remove(&label) {
+                    log::info!("Window with label {} destroyed, windows count before: {}", label, self.windows.borrow().len());
+                    if let Some(w) = self.windows.borrow_mut().remove(&label) {
                         drop(w);
                     }
-                    log::info!("Windows count after: {}", windows.len());
+                    log::info!("Windows count after: {}", self.windows.borrow().len());
                 }
                 false
             }
@@ -268,7 +371,7 @@ impl<T: UserEvent + std::fmt::Debug, M> Plugin<T> for IcedPlugin<T, M> {
                 if let Some(label) = Self::get_label_from_tao_id(*window_id, &context) {
                     self.transfer_staging_window(&label);
 
-                    if let Some(iced_window) = self.windows.lock().unwrap().get_mut(&label) {
+                    if let Some(iced_window) = self.windows.borrow_mut().get_mut(&label) {
                         match tao_window_event {
                             TaoWindowEvent::Resized(size) => {
                                 iced_window.size = PhysicalSize::new(size.width, size.height);
@@ -297,7 +400,30 @@ impl<T: UserEvent + std::fmt::Debug, M> Plugin<T> for IcedPlugin<T, M> {
                 if let Some(label) = Self::get_label_from_tao_id(*window_id, &context) {
                     self.transfer_staging_window(&label);
 
-                    if let Some(iced_window) = self.windows.lock().unwrap().get_mut(&label) {
+                    if let Some(iced_window) = self.windows.borrow_mut().get_mut(&label) {
+                        if iced_window.renderer.is_none() {
+                            let window_clone = iced_window.window.clone();
+                            let gpu_resource = match self.get_gpu_resources(
+                                window_clone,
+                                iced_window.size.width,
+                                iced_window.size.height) {
+                                    Ok(gpu_resource) => gpu_resource,
+                                    Err(e) => {
+                                        log::error!("Renderer initialization failed: {}", e);
+                                        return false;
+                                    }
+                                };
+                            let renderer = match Renderer::new(
+                                self.adapter.borrow().as_ref().expect("Adapter not initialized"),
+                                gpu_resource,) {
+                                    Ok(renderer) => renderer,
+                                    Err(e) => {
+                                        log::error!("Renderer initialization failed: {}", e);
+                                        return false;
+                                    }
+                                };
+                            iced_window.renderer = Some(renderer);
+                        }
                         iced_window.process_events();
 
                         // Render and get mouse interaction for cursor updates
