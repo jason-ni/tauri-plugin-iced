@@ -62,6 +62,8 @@ pub struct IcedPlugin<T: UserEvent + std::fmt::Debug, M> {
     app: AppHandle,
     staging_window: Arc<Mutex<StagingWindowWrapper<M>>>,
     windows: RefCell<HashMap<String, IcedWindow<M>>>,
+    queue: RefCell<Option<wgpu::Queue>>,
+    device: RefCell<Option<wgpu::Device>>,
     instance: RefCell<Option<wgpu::Instance>>,
     adapter: RefCell<Option<wgpu::Adapter>>,
     _phantom: std::marker::PhantomData<T>, // this does nothing, just keeps compiler happy
@@ -77,6 +79,8 @@ impl<T: UserEvent + std::fmt::Debug, M> IcedPlugin<T, M> {
             app,
             staging_window,
             windows: RefCell::new(windows),
+            queue: RefCell::new(None),
+            device: RefCell::new(None),
             adapter: RefCell::new(None),
             instance: RefCell::new(None),
             _phantom: PhantomData,
@@ -183,6 +187,8 @@ impl<T: UserEvent + std::fmt::Debug, M> IcedPlugin<T, M> {
                 Ok::<_, Error>((adapter, device, queue, surface, surface_capabilities))
             })?;
             self.adapter.borrow_mut().replace(adapter.clone());
+            self.device.borrow_mut().replace(device.clone());
+            self.queue.borrow_mut().replace(queue.clone());
             let surface_format = surface_capabilities
             .formats
             .iter()
@@ -219,17 +225,6 @@ impl<T: UserEvent + std::fmt::Debug, M> IcedPlugin<T, M> {
             let adapter = self.adapter.borrow().as_ref().unwrap().clone();
             let surface_capabilities = surface.get_capabilities(&adapter);
             let adapter_features = adapter.features();
-
-            let (device, queue) = tauri::async_runtime::block_on(async move {
-                adapter.request_device(&wgpu::DeviceDescriptor {
-                    label: None,
-                    required_features: adapter_features & wgpu::Features::default(),
-                    required_limits: wgpu::Limits::default(),
-                    memory_hints: wgpu::MemoryHints::MemoryUsage,
-                    trace: wgpu::Trace::Off,
-                    experimental_features: wgpu::ExperimentalFeatures::disabled(),}).await
-            })?;
-
             let surface_format = surface_capabilities
             .formats
             .iter()
@@ -244,6 +239,8 @@ impl<T: UserEvent + std::fmt::Debug, M> IcedPlugin<T, M> {
                 .find(|m| *m != wgpu::CompositeAlphaMode::Opaque)
                 .unwrap_or(surface_capabilities.alpha_modes[0]);
 
+            let device = self.device.borrow().as_ref().unwrap().clone();
+            let queue = self.queue.borrow().as_ref().unwrap().clone();
             surface.configure(
                 &device,
                 &wgpu::SurfaceConfiguration {
@@ -257,6 +254,7 @@ impl<T: UserEvent + std::fmt::Debug, M> IcedPlugin<T, M> {
                     desired_maximum_frame_latency: 2,
                 },
             );
+
             Ok(GpuResource::new(device, queue, surface, surface_format, surface_capabilities))
         }
     }
