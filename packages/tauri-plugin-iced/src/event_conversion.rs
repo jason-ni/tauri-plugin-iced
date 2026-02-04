@@ -5,17 +5,13 @@ use iced_core::keyboard;
 use iced_core::mouse;
 use iced_core::Size;
 use iced_core::SmolStr;
-use iced_wgpu::graphics::Viewport;
+use iced_tiny_skia::graphics::Viewport;
 use iced_winit::core::{Event, Point};
 use tauri_runtime_wry::tao::event::{ElementState, MouseButton, WindowEvent as TaoWindowEvent};
 use tauri_runtime_wry::tao::keyboard::{Key, KeyCode, KeyLocation, ModifiersState};
 
 /// Convert physical mouse position to logical position with scale factor.
-pub fn convert_mouse_position(
-    physical_x: f64,
-    physical_y: f64,
-    scale_factor: f32,
-) -> Point {
+pub fn convert_mouse_position(physical_x: f64, physical_y: f64, scale_factor: f32) -> Point {
     Point::new(
         physical_x as f32 / scale_factor,
         physical_y as f32 / scale_factor,
@@ -121,7 +117,6 @@ pub fn convert_window_event(
     scale_factor: f32,
     modifiers: keyboard::Modifiers,
 ) -> Option<Event> {
-
     match event {
         TaoWindowEvent::Resized(new_size) => {
             let logical_size = new_size.to_logical::<f64>(scale_factor.into());

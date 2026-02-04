@@ -1,12 +1,12 @@
 use crate::event_conversion::{convert_modifiers, convert_window_event, create_viewport};
-use crate::renderer::Renderer;
-use crate::scene::{clear, Scene};
-use crate::{IcedControls, convert_mouse_position};
+use crate::renderer::IcedRenderer;
+use crate::scene::Scene;
+use crate::{convert_mouse_position, IcedControls};
 use anyhow::Error;
 use iced_core::keyboard;
 use iced_core::mouse;
-use iced_wgpu::graphics::Viewport;
-use iced_winit::core::Event;
+use iced_tiny_skia::graphics::Viewport;
+use iced_winit::core::{Event, Rectangle};
 use iced_winit::runtime::user_interface::{Cache, State, UserInterface};
 use iced_winit::Clipboard;
 use tauri::AppHandle;
@@ -20,7 +20,7 @@ pub struct IcedWindow<M> {
     pub label: String,
     pub window: tauri::Window,
     pub controls: Box<dyn IcedControls<Message = M> + Send + Sync>,
-    pub renderer: Option<Renderer>,
+    pub renderer: Option<IcedRenderer>,
     pub viewport: Viewport,
     pub events: Vec<Event>,
     pub cache: Cache,
@@ -61,7 +61,11 @@ impl<M> IcedWindow<M> {
                 self.modifiers = convert_modifiers(&new_modifiers);
             }
             WindowEvent::CursorMoved { position, .. } => {
-                self.cursor = mouse::Cursor::Available(convert_mouse_position(position.x, position.y, self.scale_factor))
+                self.cursor = mouse::Cursor::Available(convert_mouse_position(
+                    position.x,
+                    position.y,
+                    self.scale_factor,
+                ))
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 self.scale_factor = *scale_factor as f32;
@@ -97,13 +101,13 @@ impl<M> IcedWindow<M> {
             self.controls.view(),
             self.viewport.logical_size(),
             std::mem::take(&mut self.cache),
-            renderer.iced_renderer(),
+            renderer.tiny_skia_renderer(),
         );
 
         let (state, _) = interface.update(
             &messages,
             self.cursor,
-            renderer.iced_renderer(),
+            renderer.tiny_skia_renderer(),
             &mut self.clipboard,
             &mut control_messages,
         );
@@ -122,40 +126,46 @@ impl<M> IcedWindow<M> {
         } else {
             None
         }
-
     }
 
     pub fn render(&mut self, _app_handle: &AppHandle) -> Result<Option<MouseInteraction>, Error> {
         let renderer = self.renderer.as_mut().expect("Renderer not initialized");
+
+        // Handle resize by updating surface and viewport
         if self.resized {
-            renderer.gpu_resource.resize(self.size.width, self.size.height);
+            renderer
+                .surface_resource
+                .resize(self.size.width, self.size.height);
             self.viewport = create_viewport(self.size.width, self.size.height, self.scale_factor);
             self.resized = false;
         }
 
+        // CPU rendering pipeline:
+        // 1. Get mutable pixel buffer from softbuffer surface
+        // 2. Create tiny_skia drawing target from buffer bytes
+        // 3. Build and update Iced UI
+        // 4. Composit Iced UI layers to pixel buffer
+        // 5. Draw custom scene on top (if exists)
+        // 6. Present buffer to window
 
-        let mut encoder = renderer
-            .gpu_resource
-            .device()
-            .create_command_encoder(&iced_wgpu::wgpu::CommandEncoderDescriptor { label: None });
+        let mut buffer = renderer
+            .surface_resource
+            .get_buffer_mut()
+            .map_err(|e| anyhow::anyhow!("Failed to get buffer: {}", e))?;
+        let width = buffer.width().get();
+        let height = buffer.height().get();
 
-        let frame_and_view = renderer.gpu_resource.get_frame()?;
-        if let Some(scene) = &self.scene {
-            let mut render_pass = clear(
-                &frame_and_view.view,
-                &mut encoder,
-                self.controls.background_color(),
-            );
-            scene.draw(&mut render_pass);
-        }
+        let mut pixels =
+            tiny_skia::PixmapMut::from_bytes(bytemuck::cast_slice_mut(&mut buffer), width, height)
+                .expect("Create pixel map");
 
-        renderer.gpu_resource.queue().submit([encoder.finish()]);
+        let tiny_skia_renderer = &mut renderer.renderer;
 
         let mut interface = UserInterface::build(
             self.controls.view(),
             self.viewport.logical_size(),
             std::mem::take(&mut self.cache),
-            renderer.iced_renderer(),
+            tiny_skia_renderer,
         );
 
         let (state, _) = interface.update(
@@ -163,13 +173,14 @@ impl<M> IcedWindow<M> {
                 iced_core::time::Instant::now(),
             ))],
             self.cursor,
-            renderer.iced_renderer(),
+            tiny_skia_renderer,
             &mut self.clipboard,
             &mut std::vec::Vec::new(),
         );
 
+        // Draw Iced UI to populate renderer layers (no GPU operations yet)
         interface.draw(
-            renderer.iced_renderer(),
+            tiny_skia_renderer,
             &iced_winit::core::Theme::Dark,
             &iced_core::renderer::Style::default(),
             self.cursor,
@@ -177,16 +188,25 @@ impl<M> IcedWindow<M> {
 
         self.cache = interface.into_cache();
 
-        if let iced::Renderer::Primary(wgpu_renderer) = renderer.iced_renderer() {
-            wgpu_renderer.present(
-            None,
-            frame_and_view.surface_texture.texture.format(),
-            &frame_and_view.view,
+        // Composit Iced UI layers to CPU pixel buffer using tiny_skia
+        // This performs CPU rasterization of all UI elements
+        tiny_skia_renderer.draw(
+            &mut pixels,
+            &mut tiny_skia::Mask::new(width, height).expect("Create mask"),
             &self.viewport,
-            );
+            &[Rectangle::with_size(self.viewport.logical_size())],
+            self.controls.background_color(),
+        );
+
+        // Draw custom scene on top of Iced UI (CPU rendering)
+        if let Some(scene) = &self.scene {
+            scene.draw(&mut pixels, self.controls.background_color());
         }
 
-        frame_and_view.surface_texture.present();
+        // Present pixel buffer to window (displays on screen)
+        buffer
+            .present()
+            .map_err(|e| anyhow::anyhow!("Failed to present buffer: {}", e))?;
 
         if let State::Updated {
             mouse_interaction, ..
@@ -196,24 +216,17 @@ impl<M> IcedWindow<M> {
         } else {
             Ok(None)
         }
-
     }
-
     pub fn render_with_retry(&mut self, app_handle: &AppHandle) -> Option<MouseInteraction> {
         match self.render(app_handle) {
             Ok(mouse_interaction) => mouse_interaction,
             Err(e) => {
-                if let Some(surface_error) = e.downcast_ref::<iced_wgpu::wgpu::SurfaceError>() {
-                    if surface_error == &iced_wgpu::wgpu::SurfaceError::OutOfMemory {
-                        panic!("Swapchain error: {surface_error}. Rendering cannot continue.")
-                    }
-                }
+                log::warn!("Render error: {}", e);
                 None
             }
         }
     }
 }
-
 
 pub fn set_window_transparent(window: &tauri::Window) {
     #[cfg(target_os = "macos")]

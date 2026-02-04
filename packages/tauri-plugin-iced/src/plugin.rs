@@ -1,18 +1,18 @@
 // Plugin implementation module
 
 use crate::event_conversion;
-use crate::renderer::{GpuResource, Renderer};
+use crate::renderer::IcedRenderer;
 use crate::utils::IcedWindow;
 use crate::IcedControls;
 use anyhow::Error;
 use iced_core::keyboard;
-use iced_wgpu::graphics::Viewport;
+use iced_tiny_skia::graphics::Viewport;
 use iced_winit::runtime::user_interface::Cache;
 use iced_winit::Clipboard;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
-use std::cell::RefCell;
 use tauri::{AppHandle, Manager};
 use tauri_runtime::dpi::PhysicalSize;
 use tauri_runtime::window::CursorIcon;
@@ -62,10 +62,6 @@ pub struct IcedPlugin<T: UserEvent + std::fmt::Debug, M> {
     app: AppHandle,
     staging_window: Arc<Mutex<StagingWindowWrapper<M>>>,
     windows: RefCell<HashMap<String, IcedWindow<M>>>,
-    queue: RefCell<Option<wgpu::Queue>>,
-    device: RefCell<Option<wgpu::Device>>,
-    instance: RefCell<Option<wgpu::Instance>>,
-    adapter: RefCell<Option<wgpu::Adapter>>,
     _phantom: std::marker::PhantomData<T>, // this does nothing, just keeps compiler happy
 }
 
@@ -79,10 +75,6 @@ impl<T: UserEvent + std::fmt::Debug, M> IcedPlugin<T, M> {
             app,
             staging_window,
             windows: RefCell::new(windows),
-            queue: RefCell::new(None),
-            device: RefCell::new(None),
-            adapter: RefCell::new(None),
-            instance: RefCell::new(None),
             _phantom: PhantomData,
         }
     }
@@ -156,106 +148,6 @@ impl<T: UserEvent + std::fmt::Debug, M> IcedPlugin<T, M> {
                     }
                 }
             }
-        }
-    }
-
-    fn get_gpu_resources(
-        &self, 
-        window: impl Into<wgpu::SurfaceTarget<'static>>,
-        width: u32, height: u32,
-    ) -> Result<GpuResource, Error> {
-        if self.instance.borrow().is_none() {
-            let backend = wgpu::Backends::from_env().unwrap_or_default();
-            let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-                backends: backend,
-                ..Default::default()
-            });
-            self.instance.borrow_mut().replace(instance.clone());
-            let surface = instance.create_surface(window)?;
-
-            let (adapter, device, queue, surface, surface_capabilities) = tauri::async_runtime::block_on( async move {
-                let adapter = wgpu::util::initialize_adapter_from_env_or_default(&instance, Some(&surface)).await?;
-                let surface_capabilities = surface.get_capabilities(&adapter);
-                let adapter_features = adapter.features();
-                let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor {
-                        label: None,
-                        required_features: adapter_features & wgpu::Features::default(),
-                        required_limits: wgpu::Limits::default(),
-                        memory_hints: wgpu::MemoryHints::MemoryUsage,
-                        trace: wgpu::Trace::Off,
-                        experimental_features: wgpu::ExperimentalFeatures::disabled(),}).await?;
-                Ok::<_, Error>((adapter, device, queue, surface, surface_capabilities))
-            })?;
-            self.adapter.borrow_mut().replace(adapter.clone());
-            self.device.borrow_mut().replace(device.clone());
-            self.queue.borrow_mut().replace(queue.clone());
-            let surface_format = surface_capabilities
-            .formats
-            .iter()
-            .copied()
-            .find(|f| !matches!(f, wgpu::TextureFormat::Bgra8UnormSrgb | wgpu::TextureFormat::Rgba8UnormSrgb))
-            .unwrap_or_else(|| surface_capabilities.formats[0]);
-
-            let alpha_mode = surface_capabilities
-                .alpha_modes
-                .iter()
-                .copied()
-                .find(|m| *m != wgpu::CompositeAlphaMode::Opaque)
-                .unwrap_or(surface_capabilities.alpha_modes[0]);
-
-            surface.configure(
-                &device,
-                &wgpu::SurfaceConfiguration {
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                    format: surface_format,
-                    width,
-                    height,
-                    present_mode: wgpu::PresentMode::AutoVsync,
-                    alpha_mode,
-                    view_formats: vec![],
-                    desired_maximum_frame_latency: 2,
-                },
-            );
-            Ok(GpuResource::new(device, queue, surface, surface_format, surface_capabilities))
-
-        } else {
-            let instance = self.instance.borrow();
-            let surface = instance.as_ref().unwrap().create_surface(window)?;
-
-            let adapter = self.adapter.borrow().as_ref().unwrap().clone();
-            let surface_capabilities = surface.get_capabilities(&adapter);
-            let adapter_features = adapter.features();
-            let surface_format = surface_capabilities
-            .formats
-            .iter()
-            .copied()
-            .find(|f| !matches!(f, wgpu::TextureFormat::Bgra8UnormSrgb | wgpu::TextureFormat::Rgba8UnormSrgb))
-            .unwrap_or_else(|| surface_capabilities.formats[0]);
-
-            let alpha_mode = surface_capabilities
-                .alpha_modes
-                .iter()
-                .copied()
-                .find(|m| *m != wgpu::CompositeAlphaMode::Opaque)
-                .unwrap_or(surface_capabilities.alpha_modes[0]);
-
-            let device = self.device.borrow().as_ref().unwrap().clone();
-            let queue = self.queue.borrow().as_ref().unwrap().clone();
-            surface.configure(
-                &device,
-                &wgpu::SurfaceConfiguration {
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                    format: surface_format,
-                    width,
-                    height,
-                    present_mode: wgpu::PresentMode::AutoVsync,
-                    alpha_mode,
-                    view_formats: vec![],
-                    desired_maximum_frame_latency: 2,
-                },
-            );
-
-            Ok(GpuResource::new(device, queue, surface, surface_format, surface_capabilities))
         }
     }
 }
@@ -353,7 +245,11 @@ impl<T: UserEvent + std::fmt::Debug, M> Plugin<T> for IcedPlugin<T, M> {
                 ..
             } => {
                 if let Some(label) = Self::get_label_from_tao_id(*window_id, &context) {
-                    log::info!("Window with label {} destroyed, windows count before: {}", label, self.windows.borrow().len());
+                    log::info!(
+                        "Window with label {} destroyed, windows count before: {}",
+                        label,
+                        self.windows.borrow().len()
+                    );
                     if let Some(w) = self.windows.borrow_mut().remove(&label) {
                         drop(w);
                     }
@@ -400,27 +296,24 @@ impl<T: UserEvent + std::fmt::Debug, M> Plugin<T> for IcedPlugin<T, M> {
 
                     if let Some(iced_window) = self.windows.borrow_mut().get_mut(&label) {
                         if iced_window.renderer.is_none() {
-                            let window_clone = iced_window.window.clone();
-                            let gpu_resource = match self.get_gpu_resources(
-                                window_clone,
-                                iced_window.size.width,
-                                iced_window.size.height) {
-                                    Ok(gpu_resource) => gpu_resource,
-                                    Err(e) => {
-                                        log::error!("Renderer initialization failed: {}", e);
-                                        return false;
-                                    }
-                                };
-                            let renderer = match Renderer::new(
-                                self.adapter.borrow().as_ref().expect("Adapter not initialized"),
-                                gpu_resource,) {
-                                    Ok(renderer) => renderer,
-                                    Err(e) => {
-                                        log::error!("Renderer initialization failed: {}", e);
-                                        return false;
-                                    }
-                                };
-                            iced_window.renderer = Some(renderer);
+                            let window = Arc::new(iced_window.window.clone());
+
+                            let context = softbuffer::Context::new((*window).clone());
+                            if let Err(e) = &context {
+                                log::error!("Failed to create softbuffer context: {}", e);
+                                return false;
+                            }
+                            let context = context.unwrap();
+
+                            let surface_resource =
+                                crate::renderer::SurfaceResource::new(context, window);
+
+                            let renderer = IcedRenderer::new(surface_resource);
+                            if let Err(e) = &renderer {
+                                log::error!("Renderer initialization failed: {}", e);
+                                return false;
+                            }
+                            iced_window.renderer = Some(renderer.unwrap());
                         }
                         iced_window.process_events();
 

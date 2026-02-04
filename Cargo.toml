@@ -14,8 +14,8 @@ tauri-runtime = "2.7.1"
 tauri-runtime-wry = "2.7.2"
 
 # Iced dependencies (workspace with local path references)
-iced = { path = "../iced", features = ["wgpu", "canvas", "image"] }
-iced_wgpu = { path = "../iced/wgpu", default-features = false }
+iced = { path = "../iced", features = ["canvas", "image", "tiny-skia", "thread-pool"], default-features = false }
+iced_tiny_skia = { path = "../iced/tiny_skia", default-features = false, features = ["geometry"] }
 iced_winit = { path = "../iced/winit", default-features = false }
 iced_widget = { path = "../iced/widget" }
 iced_runtime = { path = "../iced/runtime" }
@@ -24,7 +24,9 @@ iced_core = { path = "../iced/core" }
 iced_renderer = { path = "../iced/renderer" }
 
 # Graphics and async
-wgpu = { version = "28.0.0", default-features = false, features = ["std", "wgsl"] }
+softbuffer = { version = "0.4", default-features = false }
+tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
+bytemuck = { version = "1.0", features = ["derive"] }
 anyhow = "1.0.98"
 serde = { version = "1", features = ["derive"] }
 
