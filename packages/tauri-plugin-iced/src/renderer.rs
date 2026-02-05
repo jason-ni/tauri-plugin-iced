@@ -15,8 +15,8 @@ pub struct IcedRenderer {
 /// Wraps softbuffer's Context and Surface for window pixel buffer management.
 pub struct SurfaceResource {
     context: Arc<softbuffer::Context<Window>>,
-    window: Arc<Window>,
     surface: Option<softbuffer::Surface<Window, Arc<Window>>>,
+    window: Arc<Window>,
 }
 
 impl IcedRenderer {

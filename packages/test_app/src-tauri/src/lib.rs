@@ -1,6 +1,7 @@
 use iced::widget::canvas;
 use iced::widget::{button, column, container, stack, text, text_input};
 use iced::{Color, ContentFit, Length, Theme};
+use iced_winit::winit::dpi::LogicalSize;
 use tauri_plugin_iced::AppHandleExt;
 use tauri_plugin_iced::IcedControls;
 
@@ -33,6 +34,7 @@ enum CounterMessage {
     Decrement,
     TextInputChanged(String),
     CaptureScreenshot,
+    NewRawWindow,
 }
 
 impl IcedControls for Counter {
@@ -46,6 +48,7 @@ impl IcedControls for Counter {
                 text(self.value).size(30),
                 button("+").on_press(CounterMessage::Increment),
                 button("-").on_press(CounterMessage::Decrement),
+                button("New RawWindow").on_press(CounterMessage::NewRawWindow),
                 text("Text Input Demo:").size(20),
                 text_input("Type here...", &self.text_input)
                     .on_input(|s| CounterMessage::TextInputChanged(s))
@@ -69,6 +72,22 @@ impl IcedControls for Counter {
             CounterMessage::TextInputChanged(text) => {
                 self.text_input = text;
                 log::info!("Text input changed: {}", self.text_input);
+            }
+            CounterMessage::NewRawWindow => {
+                let label = format!("window_{}", self.window_counter);
+                let wind = tauri::Window::builder(self.app_handle.as_ref().unwrap(), &label)
+                    .build()
+                    .map_err(|e| format!("Failed to create window: {}", e));
+
+                match wind {
+                    Ok(w) => {
+                        let _ = w.show();
+                        self.window_counter += 1;
+                    }
+                    Err(e) => {
+                        log::error!("Failed to create window: {}", e);
+                    }
+                }
             }
             CounterMessage::CaptureScreenshot => {
                 if let Some(ref app_handle) = self.app_handle {
@@ -287,6 +306,7 @@ pub fn run() {
             let wind = tauri::Window::builder(app, "main")
                 .build()
                 .map_err(|e| format!("Failed to create window: {}", e))?;
+            wind.set_size(tauri::LogicalSize::new(500.0, 600.0))?;
             let _ = wind.show();
 
             let mut counter = Counter::default();
