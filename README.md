@@ -12,9 +12,13 @@ The leakage behavior:
 
 - Taking screenshot of the primary monitor and showing it in a new window will cause memory leakage obviously. When each window is closed, the memory usage increase by around 20MB.
 
-To get black box comparation, I tested the same scenario in the Iced multi_window example. With tiny-skia backend, the multi_window example doesn't have memory leakage issue. Even I update it to show the screenshot image in a new window, the memory usage is stable(closed window memory usage is released).
+~~To get black box comparation, I tested the same scenario in the Iced multi_window example. With tiny-skia backend, the multi_window example doesn't have memory leakage issue. Even I update it to show the screenshot image in a new window, the memory usage is stable(closed window memory usage is released).~~
 
-So I think the leakage issue is related to how Tauri handles raw window graphics context. I'm calling for help from the Tauri community to find the root cause of this issue.
+~~So I think the leakage issue is related to how Tauri handles raw window graphics context. I'm calling for help from the Tauri community to find the root cause of this issue.~~
+
+Update: I used the `Instruments` tool in Xcode to profile the memory usage of the test_app and found that the leakage point is `VM CoreAnimation` for tiny-skia backend. The root cause is lacking explicit removement of the CALayer of the window surface. 
+
+For wgpu backend, the memory leakage behavior is similar. Memory profile show that the memory of `VM IOSurface` keeps increasing. I havn't found the root cause yet. So the wgpu backend implementation is removed. I keep it in the `wgpu` branch for reference.
 
 # How to use
 
