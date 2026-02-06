@@ -22,6 +22,7 @@ use tauri_runtime_wry::tao::event_loop::{ControlFlow, EventLoopProxy, EventLoopW
 use tauri_runtime_wry::tao::window::WindowId;
 use tauri_runtime_wry::{Context, Message, Plugin, PluginBuilder, WindowMessage};
 use tauri_runtime_wry::{EventLoopIterationContext, WebContextStore};
+use objc2::rc::autoreleasepool;
 
 /// Wrapper for staging IcedWindow to handle race conditions during window creation.
 pub struct StagingWindowWrapper<M> {
@@ -206,7 +207,7 @@ impl<T: UserEvent + std::fmt::Debug, M> IcedPlugin<T, M> {
             surface.configure(
                 &device,
                 &wgpu::SurfaceConfiguration {
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    usage: wgpu::TextureUsages::TRANSIENT,
                     format: surface_format,
                     width,
                     height,
@@ -395,55 +396,58 @@ impl<T: UserEvent + std::fmt::Debug, M> Plugin<T> for IcedPlugin<T, M> {
             }
 
             Event::RedrawRequested(window_id) => {
-                if let Some(label) = Self::get_label_from_tao_id(*window_id, &context) {
-                    self.transfer_staging_window(&label);
+                autoreleasepool(|_| {
+                    if let Some(label) = Self::get_label_from_tao_id(*window_id, &context) {
+                        self.transfer_staging_window(&label);
 
-                    if let Some(iced_window) = self.windows.borrow_mut().get_mut(&label) {
-                        if iced_window.renderer.is_none() {
-                            let window_clone = iced_window.window.clone();
-                            let gpu_resource = match self.get_gpu_resources(
-                                window_clone,
-                                iced_window.size.width,
-                                iced_window.size.height) {
-                                    Ok(gpu_resource) => gpu_resource,
-                                    Err(e) => {
-                                        log::error!("Renderer initialization failed: {}", e);
-                                        return false;
-                                    }
-                                };
-                            let renderer = match Renderer::new(
-                                self.adapter.borrow().as_ref().expect("Adapter not initialized"),
-                                gpu_resource,) {
-                                    Ok(renderer) => renderer,
-                                    Err(e) => {
-                                        log::error!("Renderer initialization failed: {}", e);
-                                        return false;
-                                    }
-                                };
-                            iced_window.renderer = Some(renderer);
-                        }
-                        iced_window.process_events();
+                        if let Some(iced_window) = self.windows.borrow_mut().get_mut(&label) {
+                            if iced_window.renderer.is_none() {
+                                let window_clone = iced_window.window.clone();
+                                let gpu_resource = match self.get_gpu_resources(
+                                    window_clone,
+                                    iced_window.size.width,
+                                    iced_window.size.height) {
+                                        Ok(gpu_resource) => gpu_resource,
+                                        Err(e) => {
+                                            log::error!("Renderer initialization failed: {}", e);
+                                            return false;
+                                        }
+                                    };
+                                let renderer = match Renderer::new(
+                                    self.adapter.borrow().as_ref().expect("Adapter not initialized"),
+                                    gpu_resource,) {
+                                        Ok(renderer) => renderer,
+                                        Err(e) => {
+                                            log::error!("Renderer initialization failed: {}", e);
+                                            return false;
+                                        }
+                                    };
+                                iced_window.renderer = Some(renderer);
+                            }
+                            iced_window.process_events();
 
-                        // Render and get mouse interaction for cursor updates
-                        if let Some(mouse_interaction) = iced_window.render_with_retry(&self.app) {
-                            // Convert Iced mouse interaction to Tauri cursor icon
-                            let cursor_icon = Self::convert_cursor_icon(&mouse_interaction);
+                            // Render and get mouse interaction for cursor updates
+                            if let Some(mouse_interaction) = iced_window.render_with_retry(&self.app) {
+                                // Convert Iced mouse interaction to Tauri cursor icon
+                                let cursor_icon = Self::convert_cursor_icon(&mouse_interaction);
 
-                            // Get the Tauri window ID from tao window ID
-                            if let Some(tauri_window_id) =
-                                Self::get_id_from_tao_id(*window_id, &context)
-                            {
-                                // Send cursor icon update message to the window
-                                let _ = proxy.send_event(Message::Window(
-                                    tauri_window_id,
-                                    WindowMessage::SetCursorIcon(cursor_icon),
-                                ));
+                                // Get the Tauri window ID from tao window ID
+                                if let Some(tauri_window_id) =
+                                    Self::get_id_from_tao_id(*window_id, &context)
+                                {
+                                    // Send cursor icon update message to the window
+                                    let _ = proxy.send_event(Message::Window(
+                                        tauri_window_id,
+                                        WindowMessage::SetCursorIcon(cursor_icon),
+                                    ));
+                                }
                             }
                         }
                     }
-                }
+                    false
 
-                false
+                })
+
             }
 
             _ => false,

@@ -6369,6 +6369,7 @@ dependencies = [
  "iced_winit",
  "log",
  "objc",
+ "objc2 0.6.3",
  "serde",
  "tauri",
  "tauri-plugin",
