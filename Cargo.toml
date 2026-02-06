@@ -35,5 +35,5 @@ tauri-plugin = { version = "2.3.0", features = ["build"] }
 
 [workspace.metadata.tauri-plugin-iced]
 version = "0.1.0"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 description = "Tauri plugin for Iced GUI framework"
