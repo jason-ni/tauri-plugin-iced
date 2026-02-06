@@ -9,6 +9,7 @@ use iced_core::keyboard;
 use iced_tiny_skia::graphics::Viewport;
 use iced_winit::runtime::user_interface::Cache;
 use iced_winit::Clipboard;
+use objc2_quartz_core::CATransaction;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -251,6 +252,7 @@ impl<T: UserEvent + std::fmt::Debug, M> Plugin<T> for IcedPlugin<T, M> {
                         self.windows.borrow().len()
                     );
                     if let Some(w) = self.windows.borrow_mut().remove(&label) {
+                        CATransaction::flush();
                         drop(w);
                     }
                     log::info!("Windows count after: {}", self.windows.borrow().len());

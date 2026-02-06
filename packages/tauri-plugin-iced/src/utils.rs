@@ -12,6 +12,7 @@ use iced_winit::Clipboard;
 use tauri::AppHandle;
 use tauri_runtime::dpi::PhysicalSize;
 use tauri_runtime_wry::tao::event::WindowEvent;
+use objc2::rc::autoreleasepool;
 
 // Type alias for mouse interaction (cursor icon)
 pub type MouseInteraction = mouse::Interaction;
@@ -218,13 +219,17 @@ impl<M> IcedWindow<M> {
         }
     }
     pub fn render_with_retry(&mut self, app_handle: &AppHandle) -> Option<MouseInteraction> {
-        match self.render(app_handle) {
-            Ok(mouse_interaction) => mouse_interaction,
-            Err(e) => {
-                log::warn!("Render error: {}", e);
-                None
-            }
-        }
+        autoreleasepool(|_| {
+
+            let ret = match self.render(app_handle) {
+                Ok(mouse_interaction) => mouse_interaction,
+                Err(e) => {
+                    log::warn!("Render error: {}", e);
+                    None
+                }
+            };
+            ret
+        })
     }
 }
 
