@@ -1,10 +1,10 @@
 // Plugin implementation module
 
-use crate::event_conversion;
+use crate::{Scene, event_conversion};
 use crate::renderer::{GpuResource, Renderer};
 use crate::utils::IcedWindow;
 use crate::IcedControls;
-use anyhow::Error;
+use anyhow::{Context as AnyhowContext, Error};
 use iced_core::keyboard;
 use iced_wgpu::graphics::Viewport;
 use iced_winit::runtime::user_interface::Cache;
@@ -172,7 +172,8 @@ impl<T: UserEvent + std::fmt::Debug, M> IcedPlugin<T, M> {
                 ..Default::default()
             });
             self.instance.borrow_mut().replace(instance.clone());
-            let surface = instance.create_surface(window)?;
+            let surface = instance.create_surface(window)
+                .context("Failed to create surface")?;
 
             let (adapter, device, queue, surface, surface_capabilities) = tauri::async_runtime::block_on( async move {
                 let adapter = wgpu::util::initialize_adapter_from_env_or_default(&instance, Some(&surface)).await?;
@@ -186,10 +187,11 @@ impl<T: UserEvent + std::fmt::Debug, M> IcedPlugin<T, M> {
                         trace: wgpu::Trace::Off,
                         experimental_features: wgpu::ExperimentalFeatures::disabled(),}).await?;
                 Ok::<_, Error>((adapter, device, queue, surface, surface_capabilities))
-            })?;
+            }).context("Failed to create wgpu device and queue")?;
             self.adapter.borrow_mut().replace(adapter.clone());
             self.device.borrow_mut().replace(device.clone());
             self.queue.borrow_mut().replace(queue.clone());
+
             let surface_format = surface_capabilities
             .formats
             .iter()
@@ -197,22 +199,15 @@ impl<T: UserEvent + std::fmt::Debug, M> IcedPlugin<T, M> {
             .find(|f| !matches!(f, wgpu::TextureFormat::Bgra8UnormSrgb | wgpu::TextureFormat::Rgba8UnormSrgb))
             .unwrap_or_else(|| surface_capabilities.formats[0]);
 
-            let alpha_mode = surface_capabilities
-                .alpha_modes
-                .iter()
-                .copied()
-                .find(|m| *m != wgpu::CompositeAlphaMode::Opaque)
-                .unwrap_or(surface_capabilities.alpha_modes[0]);
-
             surface.configure(
                 &device,
                 &wgpu::SurfaceConfiguration {
-                    usage: wgpu::TextureUsages::TRANSIENT,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                     format: surface_format,
                     width,
                     height,
                     present_mode: wgpu::PresentMode::AutoVsync,
-                    alpha_mode,
+                    alpha_mode: wgpu::CompositeAlphaMode::PostMultiplied,
                     view_formats: vec![],
                     desired_maximum_frame_latency: 2,
                 },
@@ -225,20 +220,14 @@ impl<T: UserEvent + std::fmt::Debug, M> IcedPlugin<T, M> {
 
             let adapter = self.adapter.borrow().as_ref().unwrap().clone();
             let surface_capabilities = surface.get_capabilities(&adapter);
-            let adapter_features = adapter.features();
+
+            // we do not use srbg because when we paste snapshot, we find the image color is not correct.
             let surface_format = surface_capabilities
             .formats
             .iter()
             .copied()
             .find(|f| !matches!(f, wgpu::TextureFormat::Bgra8UnormSrgb | wgpu::TextureFormat::Rgba8UnormSrgb))
             .unwrap_or_else(|| surface_capabilities.formats[0]);
-
-            let alpha_mode = surface_capabilities
-                .alpha_modes
-                .iter()
-                .copied()
-                .find(|m| *m != wgpu::CompositeAlphaMode::Opaque)
-                .unwrap_or(surface_capabilities.alpha_modes[0]);
 
             let device = self.device.borrow().as_ref().unwrap().clone();
             let queue = self.queue.borrow().as_ref().unwrap().clone();
@@ -250,7 +239,7 @@ impl<T: UserEvent + std::fmt::Debug, M> IcedPlugin<T, M> {
                     width,
                     height,
                     present_mode: wgpu::PresentMode::AutoVsync,
-                    alpha_mode,
+                    alpha_mode: wgpu::CompositeAlphaMode::PostMultiplied,
                     view_formats: vec![],
                     desired_maximum_frame_latency: 2,
                 },
@@ -375,6 +364,14 @@ impl<T: UserEvent + std::fmt::Debug, M> Plugin<T> for IcedPlugin<T, M> {
                             TaoWindowEvent::Resized(size) => {
                                 iced_window.size = PhysicalSize::new(size.width, size.height);
                                 iced_window.resized = true;
+                                if let Some(win_id) =
+                                    Self::get_id_from_tao_id(*window_id, &context)
+                                {
+                                    let _ = proxy.send_event(Message::Window(
+                                        win_id,
+                                        WindowMessage::RequestRedraw,
+                                    ));
+                                }
                             }
                             _ => {
                                 if iced_window.handle_event(tao_window_event) {
@@ -389,6 +386,7 @@ impl<T: UserEvent + std::fmt::Debug, M> Plugin<T> for IcedPlugin<T, M> {
                                 }
                             }
                         }
+                        iced_window.process_events();
                     }
                 }
 
@@ -409,7 +407,7 @@ impl<T: UserEvent + std::fmt::Debug, M> Plugin<T> for IcedPlugin<T, M> {
                                     iced_window.size.height) {
                                         Ok(gpu_resource) => gpu_resource,
                                         Err(e) => {
-                                            log::error!("Renderer initialization failed: {}", e);
+                                            log::error!("Renderer initialization failed when getting GPU resources: {}", e);
                                             return false;
                                         }
                                     };
@@ -418,13 +416,13 @@ impl<T: UserEvent + std::fmt::Debug, M> Plugin<T> for IcedPlugin<T, M> {
                                     gpu_resource,) {
                                         Ok(renderer) => renderer,
                                         Err(e) => {
-                                            log::error!("Renderer initialization failed: {}", e);
+                                            log::error!("Renderer initialization failed when creating renderer: {}", e);
                                             return false;
                                         }
                                     };
                                 iced_window.renderer = Some(renderer);
                             }
-                            iced_window.process_events();
+                            //iced_window.process_events();
 
                             // Render and get mouse interaction for cursor updates
                             if let Some(mouse_interaction) = iced_window.render_with_retry(&self.app) {
@@ -444,7 +442,7 @@ impl<T: UserEvent + std::fmt::Debug, M> Plugin<T> for IcedPlugin<T, M> {
                             }
                         }
                     }
-                    false
+                    true
 
                 })
 

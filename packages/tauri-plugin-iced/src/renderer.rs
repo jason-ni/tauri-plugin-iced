@@ -82,11 +82,7 @@ impl GpuResource {
                     .first()
                     .copied()
                     .unwrap_or(wgpu::PresentMode::AutoVsync),
-                alpha_mode: self.surface_capabilities
-                    .alpha_modes
-                    .first()
-                    .copied()
-                    .unwrap_or(wgpu::CompositeAlphaMode::Auto),
+                alpha_mode: wgpu::CompositeAlphaMode::PostMultiplied,
                 view_formats: vec![],
                 desired_maximum_frame_latency: 2,
             },

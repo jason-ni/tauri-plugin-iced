@@ -15,7 +15,7 @@ pub trait IcedControls: Send + Sync {
     fn update(&mut self, message: Self::Message);
 
     fn background_color(&self) -> Color {
-        Color::WHITE
+        Color::TRANSPARENT
     }
 }
 

@@ -1,3 +1,5 @@
+use std::default;
+
 use crate::event_conversion::{convert_modifiers, convert_window_event, create_viewport};
 use crate::renderer::Renderer;
 use crate::scene::{clear, Scene};
@@ -133,13 +135,13 @@ impl<M> IcedWindow<M> {
             self.resized = false;
         }
 
+        let frame_and_view = renderer.gpu_resource.get_frame()?;
 
         let mut encoder = renderer
             .gpu_resource
             .device()
             .create_command_encoder(&iced_wgpu::wgpu::CommandEncoderDescriptor { label: None });
 
-        let frame_and_view = renderer.gpu_resource.get_frame()?;
         if let Some(scene) = &self.scene {
             let mut render_pass = clear(
                 &frame_and_view.view,
@@ -179,13 +181,14 @@ impl<M> IcedWindow<M> {
 
         if let iced::Renderer::Primary(wgpu_renderer) = renderer.iced_renderer() {
             wgpu_renderer.present(
-            None,
+            Some(iced_core::Color::from_rgba8(200, 0, 100, 0.3)),
             frame_and_view.surface_texture.texture.format(),
             &frame_and_view.view,
             &self.viewport,
             );
         }
 
+        let texture_format = frame_and_view.surface_texture.texture.format();
         frame_and_view.surface_texture.present();
 
         if let State::Updated {

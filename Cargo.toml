@@ -24,7 +24,7 @@ iced_core = { path = "../iced/core" }
 iced_renderer = { path = "../iced/renderer" }
 
 # Graphics and async
-wgpu = { version = "28.0.0", default-features = false, features = ["std", "wgsl"] }
+wgpu = { version = "28.0.0", default-features = false, features = ["std", "wgsl", "vulkan"] }
 anyhow = "1.0.98"
 serde = { version = "1", features = ["derive"] }
 
